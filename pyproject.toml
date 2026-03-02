@@ -40,6 +40,9 @@ cli = [
 fuse = [
     "mfusepy>=3.0",
 ]
+fsspec = [
+    "fsspec>=2023.1.0",
+]
 dev = [
     "vost[cli]",
     "pytest>=8.0",
@@ -47,6 +50,9 @@ dev = [
 
 [project.scripts]
 vost = "vost.cli:main"
+
+[project.entry-points."fsspec.specs"]
+vost = "vost._fsspec:VostFileSystem"
 
 [tool.hatch.build.targets.sdist]
 exclude = ["rs/target", "ts/node_modules", "site", "tmp"]
