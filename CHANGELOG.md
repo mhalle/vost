@@ -4,6 +4,18 @@ All notable changes to vost are documented in this file.
 
 ## Unreleased
 
+## v0.73.0 (2026-03-02)
+
+**Added:**
+
+- fsspec filesystem adapter (`pip install vost[fsspec]`) — use vost repos with pandas, xarray, dask, and any fsspec-aware tool via the `vost://` protocol
+- `readonly` storage option to block writes even on branches
+- Documentation page for fsspec integration
+
+**Changed:**
+
+- `RELEASING.md` version table now uses placeholder versions
+
 ## TS v0.9.7 (2026-03-01)
 
 **Changed (TS):**
