@@ -1010,4 +1010,4 @@ vost destroy -f        # remove the repository entirely
 - [CLI Reference](cli.md) -- complete command reference with all options
 - [Path Syntax](paths.md) -- detailed path parsing rules and edge cases
 - [Python API Reference](api.md) -- use vost as a Python library
-- [README](../README.md) -- core concepts and library quick start
+- [README](https://github.com/mhalle/vost#readme) -- core concepts and library quick start

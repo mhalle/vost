@@ -31,4 +31,4 @@ print(fs.read("hello.txt"))  # b'Hello, world!'
 
 ## More
 
-The top-level [README](../README.md) covers core concepts, concurrency safety, error handling, and development setup.
+The top-level [README](https://github.com/mhalle/vost#readme) covers core concepts, concurrency safety, error handling, and development setup.

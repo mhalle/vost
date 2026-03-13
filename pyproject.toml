@@ -28,6 +28,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/mhalle/vost"
+Documentation = "https://mhalle.github.io/vost/"
 Repository = "https://github.com/mhalle/vost"
 Issues = "https://github.com/mhalle/vost/issues"
 Changelog = "https://github.com/mhalle/vost/blob/master/CHANGELOG.md"

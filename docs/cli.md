@@ -858,4 +858,4 @@ See [Copy behavior](#copy-behavior) in the `cp` section.
 
 ---
 
-See also: [Path Syntax](paths.md) | [Python API Reference](api.md) | [CLI Tutorial](cli-tutorial.md) | [README](../README.md)
+See also: [Path Syntax](paths.md) | [Python API Reference](api.md) | [CLI Tutorial](cli-tutorial.md) | [README](https://github.com/mhalle/vost#readme)

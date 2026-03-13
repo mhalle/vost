@@ -1,5 +1,5 @@
 site_name: vost
-site_url: https://vost.readthedocs.io/
+site_url: https://mhalle.github.io/vost/
 repo_url: https://github.com/mhalle/vost
 theme:
   name: material
