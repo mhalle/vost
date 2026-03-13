@@ -1,0 +1,19 @@
+/* High-contrast overrides for Material for MkDocs */
+
+/* Light mode */
+[data-md-color-scheme="default"] {
+  --md-default-fg-color: #1a1a1a;
+  --md-default-fg-color--light: #333;
+  --md-default-fg-color--lighter: #555;
+  --md-typeset-color: #1a1a1a;
+  --md-code-bg-color: #f0f0f0;
+}
+
+/* Dark mode */
+[data-md-color-scheme="slate"] {
+  --md-default-fg-color: #e8e8e8;
+  --md-default-fg-color--light: #ccc;
+  --md-default-fg-color--lighter: #aaa;
+  --md-typeset-color: #e8e8e8;
+  --md-code-bg-color: #1e1e1e;
+}

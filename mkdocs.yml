@@ -16,6 +16,8 @@ theme:
     - content.code.copy
     - navigation.sections
     - search.highlight
+extra_css:
+  - stylesheets/extra.css
 nav:
   - Home: index.md
   - Python API: api.md
