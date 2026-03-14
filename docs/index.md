@@ -1,6 +1,6 @@
 # vost Documentation
 
-vost is a versioned key-value filesystem backed by bare Git repositories. Every write produces a new commit, and old snapshots remain accessible forever.
+vost is a versioned key-value filesystem backed by bare Git repositories. Every write produces a new commit, writes of multiple files can be batched, and old snapshots remain accessible forever. The API is refreshingly simple, looking more like a filesystem interface than git. The Python CLI provides Unix-like utility with syntax borrowed from familiar programs like ls, cat, cp, and rsync. Under the hood, though, vost uses bare git repositories fully compatible with other git toolchains.
 
 ## Quick install
 
