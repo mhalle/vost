@@ -4,6 +4,13 @@ All notable changes to vost are documented in this file.
 
 ## Unreleased
 
+## v0.75.1 (2026-03-14)
+
+**Added:**
+
+- `vost branch set --append --squash` — append source tree as a new commit on branch tip
+- `--append` without `--squash` reserved for future chain-replay (errors with "not yet implemented")
+
 ## v0.75.0 / TS v0.9.8 / Rust v0.9.7 / C++ v0.9.0 / Kotlin v0.9.9 (2026-03-14)
 
 **Added (all ports):**
