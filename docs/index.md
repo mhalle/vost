@@ -26,6 +26,7 @@ print(fs.read("hello.txt"))  # b'Hello, world!'
 
 ```bash
 export VOST_REPO=data.git
+vost init                         # optional — write operations auto-create the repo
 echo "Hello, world!" | vost write hello.txt
 vost cat hello.txt                # Hello, world!
 vost ls                           # hello.txt
