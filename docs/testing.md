@@ -1,6 +1,6 @@
 # Testing
 
-vost has three implementations — Python (primary), TypeScript, and Rust — with
+vost has five implementations — Python (primary), TypeScript, Rust, C++, and Kotlin — with
 shared test coverage, a cross-language interop suite, and Deno compatibility tests
 for the TypeScript port.
 
@@ -18,7 +18,7 @@ make test-all       # all of the above
 ## Python tests
 
 - **Framework:** pytest
-- **Location:** `tests/test_*.py` (29 files, ~1041 tests)
+- **Location:** `tests/test_*.py` (38 files, ~1537 tests)
 - **Run:** `uv run python -m pytest tests/ -v`
 - **Run one file:** `uv run python -m pytest tests/test_sync.py -v`
 - **Run one test:** `uv run python -m pytest tests/test_sync.py -k test_basic_sync -v`

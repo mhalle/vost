@@ -4,6 +4,28 @@ All notable changes to vost are documented in this file.
 
 ## Unreleased
 
+## v0.75.0 / TS v0.9.8 / Rust v0.9.7 / C++ v0.9.0 / Kotlin v0.9.9 (2026-03-14)
+
+**Added (all ports):**
+
+- `store.fs(ref)` — unified ref resolution (branches → tags → commit hash) from a single entry point
+- Advisory `parents` parameter on all commit-producing methods (`write`, `apply`, `batch`, `remove`, `move`, `copy_in`, `sync_in`, `copy_from_ref`). Extra parent commits are recorded in the commit object without merging trees, enabling provenance tracking.
+- `fs.squash(parent, message)` — create a new commit with the same tree but collapsed history. Optional parent for grafting onto an existing branch tip.
+- Ref renaming on `backup`/`restore`/`bundle_export`/`bundle_import` — pass a dict/map (src→dst) to rename refs during transfer. CLI: `--ref src:dst` syntax.
+- `bundle_export(squash=True)` — strip history when creating bundles. Each ref becomes a single parentless commit with the current tree.
+
+**Added (Python CLI):**
+
+- `--parent REF` option (repeatable) on `write`, `rm`, `mv`, `cp`, `sync` for advisory parent commits
+- `--squash` flag on `vost branch set` to create single-commit branches
+- `--squash` flag on `vost backup` for squashed bundle export
+- `--ref src:dst` syntax on `vost backup` / `vost restore` for ref renaming
+
+**Docs:**
+
+- Added `store.fs()` to API reference
+- Added `--parent` and advisory parents appendix to CLI reference
+
 ## v0.74.0 (2026-03-12)
 
 **Fixed:**
