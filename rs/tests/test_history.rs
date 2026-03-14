@@ -1068,6 +1068,7 @@ fn log_path_filter_detects_mode_change() {
     fs.write("script.sh", b"#!/bin/sh", fs::WriteOptions {
         mode: Some(MODE_BLOB_EXEC),
         message: Some("make executable".into()),
+        ..Default::default()
     })
     .unwrap();
     let fs = store.branches().get("main").unwrap();

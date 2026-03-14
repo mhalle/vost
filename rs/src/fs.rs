@@ -35,6 +35,9 @@ pub struct WriteOptions {
     pub message: Option<String>,
     /// Git filemode override (e.g. `MODE_BLOB`, `MODE_LINK`). Auto-detected if `None`.
     pub mode: Option<u32>,
+    /// Advisory extra parent commits (e.g. merge parents). These are appended
+    /// after the branch tip (first parent) without any tree merging.
+    pub parents: Vec<Fs>,
 }
 
 /// Options for [`Fs::apply`].
@@ -44,6 +47,9 @@ pub struct ApplyOptions {
     pub message: Option<String>,
     /// Operation prefix for auto-generated commit messages (e.g. `"import"`).
     pub operation: Option<String>,
+    /// Advisory extra parent commits (e.g. merge parents). These are appended
+    /// after the branch tip (first parent) without any tree merging.
+    pub parents: Vec<Fs>,
 }
 
 /// Options for [`Fs::batch`].
@@ -53,6 +59,9 @@ pub struct BatchOptions {
     pub message: Option<String>,
     /// Operation prefix for auto-generated commit messages (e.g. `"mv"`).
     pub operation: Option<String>,
+    /// Advisory extra parent commits (e.g. merge parents). These are appended
+    /// after the branch tip (first parent) without any tree merging.
+    pub parents: Vec<Fs>,
 }
 
 /// Options for [`Fs::copy_in`].
@@ -72,6 +81,9 @@ pub struct CopyInOptions {
     pub dry_run: bool,
     /// Compare by content hash to skip unchanged files (default `true`).
     pub checksum: bool,
+    /// Advisory extra parent commits (e.g. merge parents). These are appended
+    /// after the branch tip (first parent) without any tree merging.
+    pub parents: Vec<Fs>,
 }
 
 impl Default for CopyInOptions {
@@ -83,6 +95,7 @@ impl Default for CopyInOptions {
             message: None,
             dry_run: false,
             checksum: true,
+            parents: Vec::new(),
         }
     }
 }
@@ -112,6 +125,9 @@ pub struct SyncOptions {
     pub dry_run: bool,
     /// Compare by content hash to skip unchanged files (default `true`).
     pub checksum: bool,
+    /// Advisory extra parent commits (e.g. merge parents). These are appended
+    /// after the branch tip (first parent) without any tree merging.
+    pub parents: Vec<Fs>,
 }
 
 impl Default for SyncOptions {
@@ -123,6 +139,7 @@ impl Default for SyncOptions {
             message: None,
             dry_run: false,
             checksum: true,
+            parents: Vec::new(),
         }
     }
 }
@@ -136,6 +153,9 @@ pub struct RemoveOptions {
     pub dry_run: bool,
     /// Commit message. Auto-generated if `None`.
     pub message: Option<String>,
+    /// Advisory extra parent commits (e.g. merge parents). These are appended
+    /// after the branch tip (first parent) without any tree merging.
+    pub parents: Vec<Fs>,
 }
 
 /// Options for [`Fs::remove_from_disk`].
@@ -156,6 +176,9 @@ pub struct MoveOptions {
     pub dry_run: bool,
     /// Commit message. Auto-generated if `None`.
     pub message: Option<String>,
+    /// Advisory extra parent commits (e.g. merge parents). These are appended
+    /// after the branch tip (first parent) without any tree merging.
+    pub parents: Vec<Fs>,
 }
 
 /// Options for [`Fs::copy_from_ref`].
@@ -168,6 +191,9 @@ pub struct CopyFromRefOptions {
     pub dry_run: bool,
     /// Commit message. Auto-generated if `None`.
     pub message: Option<String>,
+    /// Advisory extra parent commits (e.g. merge parents). These are appended
+    /// after the branch tip (first parent) without any tree merging.
+    pub parents: Vec<Fs>,
 }
 
 /// Options for [`Fs::log`].
@@ -574,6 +600,7 @@ impl Fs {
         let message = opts
             .message
             .unwrap_or_else(|| crate::paths::format_commit_message("write", Some(&path)));
+        let extra: Vec<&Fs> = opts.parents.iter().collect();
 
         let tw = self.with_repo(|repo| {
             let blob_oid = repo.blob(data).map_err(Error::git)?;
@@ -585,7 +612,7 @@ impl Fs {
         })?;
 
         let writes = vec![(path, Some(tw))];
-        self.commit_changes(&writes, &message)
+        self.commit_changes_with_parents(&writes, &message, &extra)
     }
 
     /// Write `text` to `path` and commit, returning a new [`Fs`].
@@ -666,10 +693,11 @@ impl Fs {
         }
 
         let op = opts.operation.as_deref().unwrap_or("apply");
+        let extra: Vec<&Fs> = opts.parents.iter().collect();
         let message = opts
             .message
             .unwrap_or_else(|| crate::paths::format_commit_message(op, None));
-        self.commit_changes(&writes, &message)
+        self.commit_changes_with_parents(&writes, &message, &extra)
     }
 
     /// Return a [`Batch`] for accumulating multiple writes in one commit.
@@ -680,6 +708,7 @@ impl Fs {
             removes: vec![],
             message: opts.message,
             operation: opts.operation,
+            parents: opts.parents,
             closed: false,
         }
     }
@@ -720,13 +749,14 @@ impl Fs {
         if opts.dry_run {
             return Ok((report, self.clone()));
         }
+        let extra: Vec<&Fs> = opts.parents.iter().collect();
         let new_fs = if !writes.is_empty() {
             let tw_writes: Vec<(String, Option<TreeWrite>)> = writes
                 .into_iter()
                 .map(|(p, tw)| (p, Some(tw)))
                 .collect();
             let msg = opts.message.unwrap_or_else(|| crate::paths::format_commit_message("copy_in", None));
-            self.commit_changes(&tw_writes, &msg)?
+            self.commit_changes_with_parents(&tw_writes, &msg, &extra)?
         } else {
             self.clone()
         };
@@ -775,9 +805,10 @@ impl Fs {
         if opts.dry_run {
             return Ok((report, self.clone()));
         }
+        let extra: Vec<&Fs> = opts.parents.iter().collect();
         let new_fs = if !writes.is_empty() {
             let msg = opts.message.unwrap_or_else(|| crate::paths::format_commit_message("sync_in", None));
-            self.commit_changes(&writes, &msg)?
+            self.commit_changes_with_parents(&writes, &msg, &extra)?
         } else {
             self.clone()
         };
@@ -857,10 +888,11 @@ impl Fs {
             return Ok(fs);
         }
 
+        let extra: Vec<&Fs> = opts.parents.iter().collect();
         let msg = opts.message.unwrap_or_else(|| {
             crate::paths::format_commit_message("remove", None)
         });
-        let mut new_fs = self.commit_changes(&writes, &msg)?;
+        let mut new_fs = self.commit_changes_with_parents(&writes, &msg, &extra)?;
         new_fs.changes = Some(report);
         Ok(new_fs)
     }
@@ -873,12 +905,13 @@ impl Fs {
         opts: WriteOptions,
     ) -> Result<Fs> {
         let tree_oid = self.require_tree()?;
+        let extra: Vec<&Fs> = opts.parents.iter().collect();
         let writes = self.with_repo(|repo| crate::copy::rename(repo, tree_oid, src, dest))?;
         if !writes.is_empty() {
             let msg = opts.message.unwrap_or_else(|| {
                 crate::paths::format_commit_message("rename", Some(&format!("{} -> {}", src, dest)))
             });
-            self.commit_changes(&writes, &msg)
+            self.commit_changes_with_parents(&writes, &msg, &extra)
         } else {
             Ok(self.clone())
         }
@@ -959,10 +992,11 @@ impl Fs {
             return Ok(self.clone());
         }
 
+        let extra: Vec<&Fs> = opts.parents.iter().collect();
         let msg = opts.message.unwrap_or_else(|| {
             crate::paths::format_commit_message("move", None)
         });
-        self.commit_changes(&all_writes, &msg)
+        self.commit_changes_with_parents(&all_writes, &msg, &extra)
     }
 
     /// Copy files from another branch, tag, or detached commit into this
@@ -1141,10 +1175,11 @@ impl Fs {
             return Ok(fs);
         }
 
+        let extra: Vec<&Fs> = opts.parents.iter().collect();
         let msg = opts.message.unwrap_or_else(|| {
             crate::paths::format_commit_message("cp", None)
         });
-        let mut new_fs = self.commit_changes(&writes, &msg)?;
+        let mut new_fs = self.commit_changes_with_parents(&writes, &msg, &extra)?;
         new_fs.changes = Some(report);
         Ok(new_fs)
     }
@@ -1460,13 +1495,37 @@ impl Fs {
     }
 
     /// Commit accumulated changes and return the new `Fs` snapshot.
+    ///
+    /// `extra_parents` are advisory parent commits (e.g. merge parents) whose
+    /// OIDs are appended after the branch tip (first parent). No tree merging
+    /// is performed — the tree is built solely from `writes`.
+    #[allow(dead_code)]
     pub(crate) fn commit_changes(
         &self,
         writes: &[(String, Option<TreeWrite>)],
         message: &str,
     ) -> Result<Fs> {
+        self.commit_changes_with_parents(writes, message, &[])
+    }
+
+    /// Like [`commit_changes`] but with extra parent commits.
+    pub(crate) fn commit_changes_with_parents(
+        &self,
+        writes: &[(String, Option<TreeWrite>)],
+        message: &str,
+        extra_parents: &[&Fs],
+    ) -> Result<Fs> {
         let branch = self.require_writable("commit")?;
         let refname = format!("refs/heads/{}", branch);
+
+        // Resolve extra parent OIDs upfront (before locking).
+        let mut extra_oids: Vec<git2::Oid> = Vec::new();
+        for ep in extra_parents {
+            let oid = ep.commit_oid.ok_or_else(|| {
+                Error::git_msg("extra parent has no commit".to_string())
+            })?;
+            extra_oids.push(oid);
+        }
 
         let repo = self
             .inner
@@ -1512,7 +1571,16 @@ impl Fs {
             } else {
                 None
             };
-            let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
+
+            // Build parents list: branch tip first, then extra parents.
+            let mut extra_commits: Vec<git2::Commit> = Vec::new();
+            for oid in &extra_oids {
+                extra_commits.push(repo.find_commit(*oid).map_err(Error::git)?);
+            }
+            let mut parents: Vec<&git2::Commit> = parent_commit.iter().collect();
+            for c in &extra_commits {
+                parents.push(c);
+            }
 
             let new_commit_oid = repo.commit(
                 None, // don't update ref yet — we do it manually for CAS

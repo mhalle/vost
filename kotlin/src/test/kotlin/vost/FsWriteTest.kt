@@ -1,5 +1,6 @@
 package vost
 
+import org.eclipse.jgit.revwalk.RevWalk
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.io.FileNotFoundException
@@ -533,6 +534,153 @@ class FsWriteTest {
             assertNotNull(changes)
             assertEquals(1, changes.delete.size)
             assertEquals("file.txt", changes.delete[0].path)
+        }
+    }
+
+    // --- parents parameter tests ---
+
+    private fun parentCount(store: GitStore, fs: Fs): Int {
+        val revWalk = RevWalk(store.repo)
+        try {
+            val commit = revWalk.parseCommit(fs.commitId)
+            return commit.parentCount
+        } finally {
+            revWalk.close()
+        }
+    }
+
+    @Test
+    fun `write with no parents has one parent`() {
+        val store = createStore()
+        store.use {
+            var fs = it.branches["main"]
+            fs = fs.write("a.txt", "hello".toByteArray())
+            assertEquals(1, parentCount(it, fs))
+        }
+    }
+
+    @Test
+    fun `write with parents creates merge commit`() {
+        val store = createStore()
+        store.use {
+            // Create two branches
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "main".toByteArray())
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.write("b.txt", "other".toByteArray())
+
+            // Write on main with other as extra parent
+            val merged = mainFs.write("c.txt", "merged".toByteArray(), parents = listOf(otherFs))
+            assertEquals(2, parentCount(it, merged))
+
+            // Verify content is accessible
+            assertEquals("merged", String(merged.read("c.txt")))
+
+            // Verify first parent is the previous main commit
+            val revWalk = RevWalk(it.repo)
+            try {
+                val commit = revWalk.parseCommit(merged.commitId)
+                assertEquals(mainFs.commitId, commit.getParent(0).id)
+                assertEquals(otherFs.commitId, commit.getParent(1).id)
+            } finally {
+                revWalk.close()
+            }
+        }
+    }
+
+    @Test
+    fun `writeText with parents creates merge commit`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.writeText("a.txt", "main")
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.writeText("b.txt", "other")
+
+            val merged = mainFs.writeText("c.txt", "merged", parents = listOf(otherFs))
+            assertEquals(2, parentCount(it, merged))
+        }
+    }
+
+    @Test
+    fun `apply with parents creates merge commit`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "main".toByteArray())
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.write("b.txt", "other".toByteArray())
+
+            val merged = mainFs.apply(
+                writes = mapOf("c.txt" to "merged"),
+                parents = listOf(otherFs),
+            )
+            assertEquals(2, parentCount(it, merged))
+        }
+    }
+
+    @Test
+    fun `batch with parents creates merge commit`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "main".toByteArray())
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.write("b.txt", "other".toByteArray())
+
+            val batch = mainFs.batch(parents = listOf(otherFs))
+            batch.write("c.txt", "merged".toByteArray())
+            val merged = batch.commit()
+            assertEquals(2, parentCount(it, merged))
+        }
+    }
+
+    @Test
+    fun `first parent lineage preserved with parents`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "v1".toByteArray())
+            val beforeMerge = mainFs
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.write("b.txt", "other".toByteArray())
+
+            val merged = mainFs.write("c.txt", "merged".toByteArray(), parents = listOf(otherFs))
+
+            // parent walks first-parent, so should give us beforeMerge
+            val parent = merged.parent
+            assertNotNull(parent)
+            assertEquals(beforeMerge.commitId, parent!!.commitId)
+        }
+    }
+
+    @Test
+    fun `write with multiple extra parents`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "main".toByteArray())
+
+            it.branches["b1"] = mainFs
+            var b1Fs = it.branches["b1"]
+            b1Fs = b1Fs.write("b1.txt", "b1".toByteArray())
+
+            it.branches["b2"] = mainFs
+            var b2Fs = it.branches["b2"]
+            b2Fs = b2Fs.write("b2.txt", "b2".toByteArray())
+
+            val merged = mainFs.write("m.txt", "merged".toByteArray(), parents = listOf(b1Fs, b2Fs))
+            assertEquals(3, parentCount(it, merged))
         }
     }
 }

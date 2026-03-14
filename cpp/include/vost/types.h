@@ -274,6 +274,7 @@ struct OpenOptions {
 struct WriteOptions {
     std::optional<std::string> message; ///< Commit message.
     std::optional<uint32_t>    mode;    ///< Git filemode override.
+    std::vector<std::string>   parents; ///< Advisory extra parent commit hashes.
 };
 
 // ---------------------------------------------------------------------------
@@ -284,6 +285,7 @@ struct WriteOptions {
 struct ApplyOptions {
     std::optional<std::string> message;
     std::optional<std::string> operation; ///< Operation prefix for auto-generated messages.
+    std::vector<std::string>   parents;   ///< Advisory extra parent commit hashes.
 };
 
 // ---------------------------------------------------------------------------
@@ -305,6 +307,7 @@ struct RemoveOptions {
 struct BatchOptions {
     std::optional<std::string> message;
     std::optional<std::string> operation; ///< Operation prefix for auto-generated messages.
+    std::vector<std::string>   parents;   ///< Advisory extra parent commit hashes.
 };
 
 // ---------------------------------------------------------------------------

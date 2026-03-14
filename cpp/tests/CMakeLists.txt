@@ -13,6 +13,7 @@ add_executable(vost_tests
     test_apply.cpp
     test_move.cpp
     test_mirror.cpp
+    test_parents.cpp
 )
 
 target_link_libraries(vost_tests

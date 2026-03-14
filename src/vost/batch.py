@@ -23,13 +23,14 @@ class Batch:
             if uncommitted or aborted.
     """
 
-    def __init__(self, fs: FS, message: str | None = None, operation: str | None = None):
+    def __init__(self, fs: FS, message: str | None = None, operation: str | None = None, parents: list[FS] | None = None):
         if not fs._writable:
             raise fs._readonly_error("batch on")
         self._fs = fs
         self._repo = fs._store._repo
         self._message = message
         self._operation = operation
+        self._parents = parents
         self._writes: dict[str, bytes | tuple[bytes, int] | bytes | tuple[bytes, int]] = {}
         self._removes: set[str] = set()
         self._closed = False
@@ -170,7 +171,7 @@ class Batch:
             self._closed = True
             return self.fs
 
-        self.fs = self._fs._commit_changes(self._writes, self._removes, self._message, self._operation)
+        self.fs = self._fs._commit_changes(self._writes, self._removes, self._message, self._operation, parents=self._parents)
         self._closed = True
         return self.fs
 
@@ -192,6 +193,6 @@ class Batch:
             return False
 
         # Let _commit_changes build changes and generate message
-        self.fs = self._fs._commit_changes(self._writes, self._removes, self._message, self._operation)
+        self.fs = self._fs._commit_changes(self._writes, self._removes, self._message, self._operation, parents=self._parents)
         self._closed = True
         return False

@@ -323,7 +323,8 @@ Fs Fs::commit_changes(
                                 std::pair<std::vector<uint8_t>, uint32_t>>>& writes,
     const std::vector<std::string>& removes,
     const std::string& message,
-    std::optional<ChangeReport> report) const
+    std::optional<ChangeReport> report,
+    const std::vector<std::string>& extra_parent_oids) const
 {
     const std::string& ref = require_writable("write");
     std::string refname = "refs/heads/" + ref;
@@ -362,9 +363,16 @@ Fs Fs::commit_changes(
 
         new_tree_hex = tree::rebuild_tree(inner_->repo, base_tree, writes, removes);
 
-        // Create commit
+        // Create commit — build full parents list (branch tip + extras)
+        std::vector<std::string> all_parents;
+        if (!commit_oid_hex_.empty()) {
+            all_parents.push_back(commit_oid_hex_);
+        }
+        all_parents.insert(all_parents.end(),
+                           extra_parent_oids.begin(),
+                           extra_parent_oids.end());
         new_commit_hex = tree::write_commit(inner_->repo, new_tree_hex,
-                                             commit_oid_hex_,
+                                             all_parents,
                                              inner_->signature,
                                              message);
 
@@ -497,7 +505,7 @@ Fs Fs::write(const std::string& path,
 
     std::vector<std::pair<std::string, std::pair<std::vector<uint8_t>, uint32_t>>> writes;
     writes.push_back({norm, {data, mode}});
-    return commit_changes(writes, {}, msg);
+    return commit_changes(writes, {}, msg, std::nullopt, opts.parents);
 }
 
 Fs Fs::write_text(const std::string& path,
@@ -536,7 +544,7 @@ Fs Fs::write_symlink(const std::string& path,
 
     std::vector<std::pair<std::string, std::pair<std::vector<uint8_t>, uint32_t>>> writes;
     writes.push_back({norm, {data, MODE_LINK}});
-    return commit_changes(writes, {}, msg);
+    return commit_changes(writes, {}, msg, std::nullopt, opts.parents);
 }
 
 Fs Fs::apply(const std::vector<std::pair<std::string, WriteEntry>>& writes,
@@ -561,7 +569,7 @@ Fs Fs::apply(const std::vector<std::pair<std::string, WriteEntry>>& writes,
     norm_removes.reserve(removes.size());
     for (auto& r : removes) norm_removes.push_back(paths::normalize(r));
 
-    return commit_changes(internal, norm_removes, msg);
+    return commit_changes(internal, norm_removes, msg, std::nullopt, opts.parents);
 }
 
 Fs Fs::remove(const std::vector<std::string>& paths_in, RemoveOptions opts) const {

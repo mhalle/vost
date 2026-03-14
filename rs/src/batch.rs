@@ -15,6 +15,7 @@ pub struct Batch {
     pub(crate) removes: Vec<String>,
     pub(crate) message: Option<String>,
     pub(crate) operation: Option<String>,
+    pub(crate) parents: Vec<Fs>,
     pub(crate) closed: bool,
 }
 
@@ -134,7 +135,8 @@ impl Batch {
             )
         });
 
-        self.fs.commit_changes(&all_writes, &message)
+        let extra: Vec<&Fs> = self.parents.iter().collect();
+        self.fs.commit_changes_with_parents(&all_writes, &message, &extra)
     }
 
     /// Returns `true` if `commit()` has already been called.

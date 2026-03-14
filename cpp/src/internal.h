@@ -89,7 +89,7 @@ std::string rebuild_tree(
 
 std::string write_commit(git_repository* repo,
                           const std::string& tree_oid_hex,
-                          const std::string& parent_commit_oid_hex,
+                          const std::vector<std::string>& parent_oids,
                           const Signature& sig,
                           const std::string& message);
 

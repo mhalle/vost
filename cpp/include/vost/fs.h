@@ -333,7 +333,8 @@ private:
         const std::vector<std::pair<std::string, std::pair<std::vector<uint8_t>, uint32_t>>>& writes,
         const std::vector<std::string>& removes,
         const std::string& message,
-        std::optional<ChangeReport> report = std::nullopt) const;
+        std::optional<ChangeReport> report = std::nullopt,
+        const std::vector<std::string>& extra_parent_oids = {}) const;
 };
 
 // ---------------------------------------------------------------------------

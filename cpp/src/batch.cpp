@@ -14,6 +14,7 @@ Batch::Batch(Fs fs, BatchOptions opts)
     : fs_(std::move(fs))
     , message_(std::move(opts.message))
     , operation_(std::move(opts.operation))
+    , parents_(std::move(opts.parents))
 {}
 
 void Batch::require_open() const {
@@ -118,7 +119,7 @@ Fs Batch::commit() {
     }
 
     // Delegate to Fs::commit_changes (internal)
-    Fs result = fs_.commit_changes(writes_, removes_, msg);
+    Fs result = fs_.commit_changes(writes_, removes_, msg, std::nullopt, parents_);
     result_fs_ = result;
     return result;
 }

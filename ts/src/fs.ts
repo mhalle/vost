@@ -669,6 +669,7 @@ export class FS {
     removes: Set<string>,
     message?: string | null,
     operation?: string | null,
+    parents?: FS[],
   ): Promise<FS> {
     if (!this._writable) throw this._readonlyError('write to');
 
@@ -708,6 +709,13 @@ export class FS {
       }
 
       // Create commit
+      const parentOids = [commitOid];
+      if (parents) {
+        for (const p of parents) {
+          if (!p._commitOid) throw new Error('parent has no commit');
+          parentOids.push(p._commitOid);
+        }
+      }
       const now = Math.floor(Date.now() / 1000);
       const oid = await git.writeCommit({
         fs: this._fsModule,
@@ -715,7 +723,7 @@ export class FS {
         commit: {
           message: finalMessage + '\n',
           tree: newTreeOid,
-          parent: [commitOid],
+          parent: parentOids,
           author: { name: sig.name, email: sig.email, timestamp: now, timezoneOffset: 0 },
           committer: { name: sig.name, email: sig.email, timestamp: now, timezoneOffset: 0 },
         },
@@ -766,14 +774,14 @@ export class FS {
   async write(
     path: string,
     data: Uint8Array,
-    opts?: { message?: string; mode?: FileType | string },
+    opts?: { message?: string; mode?: FileType | string; parents?: FS[] },
   ): Promise<FS> {
     const normalized = normalizePath(path);
     const mode = opts?.mode
       ? resolveMode(opts.mode)
       : MODE_BLOB;
     const writes = new Map<string, TreeWrite>([[normalized, { data, mode }]]);
-    return this._commitChanges(writes, new Set(), opts?.message);
+    return this._commitChanges(writes, new Set(), opts?.message, undefined, opts?.parents);
   }
 
   /**
@@ -791,7 +799,7 @@ export class FS {
   async writeText(
     path: string,
     text: string,
-    opts?: { message?: string; mode?: FileType | string },
+    opts?: { message?: string; mode?: FileType | string; parents?: FS[] },
   ): Promise<FS> {
     const data = new TextEncoder().encode(text);
     return this.write(path, data, opts);
@@ -814,7 +822,7 @@ export class FS {
   async writeFromFile(
     path: string,
     localPath: string,
-    opts?: { message?: string; mode?: FileType | string },
+    opts?: { message?: string; mode?: FileType | string; parents?: FS[] },
   ): Promise<FS> {
     const normalized = normalizePath(path);
     const detectedMode = await modeFromDisk(this._fsModule, localPath);
@@ -824,7 +832,7 @@ export class FS {
     const data = (await this._fsModule.promises.readFile(localPath)) as Uint8Array;
     const blobOid = await git.writeBlob({ fs: this._fsModule, gitdir: this._gitdir, blob: data });
     const writes = new Map<string, TreeWrite>([[normalized, { oid: blobOid, mode }]]);
-    return this._commitChanges(writes, new Set(), opts?.message);
+    return this._commitChanges(writes, new Set(), opts?.message, undefined, opts?.parents);
   }
 
   /**
@@ -841,12 +849,12 @@ export class FS {
   async writeSymlink(
     path: string,
     target: string,
-    opts?: { message?: string },
+    opts?: { message?: string; parents?: FS[] },
   ): Promise<FS> {
     const normalized = normalizePath(path);
     const data = new TextEncoder().encode(target);
     const writes = new Map<string, TreeWrite>([[normalized, { data, mode: MODE_LINK }]]);
-    return this._commitChanges(writes, new Set(), opts?.message);
+    return this._commitChanges(writes, new Set(), opts?.message, undefined, opts?.parents);
   }
 
   /**
@@ -871,7 +879,7 @@ export class FS {
   async apply(
     writes?: Record<string, WriteEntry | Uint8Array | string> | null,
     removes?: string | string[] | Set<string> | null,
-    opts?: { message?: string; operation?: string },
+    opts?: { message?: string; operation?: string; parents?: FS[] },
   ): Promise<FS> {
     const internalWrites = new Map<string, TreeWrite>();
 
@@ -925,7 +933,7 @@ export class FS {
       removeSet = new Set(removes.map(normalizePath));
     }
 
-    return this._commitChanges(internalWrites, removeSet, opts?.message, opts?.operation);
+    return this._commitChanges(internalWrites, removeSet, opts?.message, opts?.operation, opts?.parents);
   }
 
   /**
@@ -937,8 +945,8 @@ export class FS {
    * @returns A Batch instance. Call `batch.commit()` to finalize.
    * @throws {PermissionError} If this snapshot is read-only.
    */
-  batch(opts?: { message?: string; operation?: string }): Batch {
-    return new Batch(this, opts?.message, opts?.operation);
+  batch(opts?: { message?: string; operation?: string; parents?: FS[] }): Batch {
+    return new Batch(this, opts?.message, opts?.operation, opts?.parents);
   }
 
   /**

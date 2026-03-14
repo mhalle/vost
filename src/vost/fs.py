@@ -607,6 +607,7 @@ class FS:
         removes: set[str],
         message: str | None,
         operation: str | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         if not self._writable:
             raise self._readonly_error("write to")
@@ -656,13 +657,17 @@ class FS:
                 return self  # nothing changed, branch is current
 
             # Create commit object and move the ref
+            parent_oids = [self._commit_oid]
+            if parents:
+                for p in parents:
+                    parent_oids.append(p._commit_oid)
             new_commit_oid = repo.create_commit(
                 None,
                 sig,
                 sig,
                 final_message,
                 new_tree_oid,
-                [self._commit_oid],
+                parent_oids,
             )
             # Pass commit message to reflog
             ref.set_target(new_commit_oid, message=f"commit: {final_message}".encode(), committer=sig._identity)
@@ -678,6 +683,7 @@ class FS:
         *,
         message: str | None = None,
         mode: FileType | int | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Write *data* to *path* and commit, returning a new :class:`FS`.
 
@@ -696,7 +702,7 @@ class FS:
             mode = mode.filemode
         path = _normalize_path(path)
         value: bytes | tuple[bytes, int] = (data, mode) if mode is not None else data
-        return self._commit_changes({path: value}, set(), message)
+        return self._commit_changes({path: value}, set(), message, parents=parents)
 
     def write_text(
         self,
@@ -706,6 +712,7 @@ class FS:
         encoding: str = "utf-8",
         message: str | None = None,
         mode: FileType | int | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Write *text* to *path* and commit, returning a new :class:`FS`.
 
@@ -720,7 +727,7 @@ class FS:
             PermissionError: If this snapshot is read-only.
             StaleSnapshotError: If the branch has advanced since this snapshot.
         """
-        return self.write(path, text.encode(encoding), message=message, mode=mode)
+        return self.write(path, text.encode(encoding), message=message, mode=mode, parents=parents)
 
     def write_from_file(
         self,
@@ -729,6 +736,7 @@ class FS:
         *,
         message: str | None = None,
         mode: FileType | int | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Write a local file into the repo and commit, returning a new :class:`FS`.
 
@@ -755,7 +763,7 @@ class FS:
         repo = self._store._repo
         blob_oid = repo.create_blob_fromdisk(local_path)
         value: bytes | tuple[bytes, int] = (blob_oid, mode) if mode != GIT_FILEMODE_BLOB else blob_oid
-        return self._commit_changes({path: value}, set(), message)
+        return self._commit_changes({path: value}, set(), message, parents=parents)
 
     def write_symlink(
         self,
@@ -763,6 +771,7 @@ class FS:
         target: str,
         *,
         message: str | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Create a symbolic link entry and commit, returning a new :class:`FS`.
 
@@ -779,7 +788,7 @@ class FS:
         data = target.encode()
         return self._commit_changes(
             {path: (data, GIT_FILEMODE_LINK)}, set(),
-            message,
+            message, parents=parents,
         )
 
     def apply(
@@ -789,6 +798,7 @@ class FS:
         *,
         message: str | None = None,
         operation: str | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Apply multiple writes and removes in a single atomic commit.
 
@@ -857,20 +867,21 @@ class FS:
         else:
             remove_set = {_normalize_path(r) for r in removes}
 
-        return self._commit_changes(internal_writes, remove_set, message, operation)
+        return self._commit_changes(internal_writes, remove_set, message, operation, parents=parents)
 
-    def batch(self, message: str | None = None, operation: str | None = None):
+    def batch(self, message: str | None = None, operation: str | None = None, parents: list[FS] | None = None):
         """Return a :class:`Batch` context manager for multiple writes in one commit.
 
         Args:
             message: Commit message (auto-generated if ``None``).
             operation: Operation name for auto-generated messages.
+            parents: Additional parent :class:`FS` snapshots (advisory merge parents).
 
         Raises:
             PermissionError: If this snapshot is read-only.
         """
         from .batch import Batch
-        return Batch(self, message=message, operation=operation)
+        return Batch(self, message=message, operation=operation, parents=parents)
 
     # --- Copy / Sync / Remove / Move ---
 
@@ -1465,6 +1476,7 @@ def retry_write(
     message: str | None = None,
     mode: FileType | int | None = None,
     retries: int = 5,
+    parents: list[FS] | None = None,
 ) -> FS:
     """Write data to a branch with automatic retry on concurrent modification.
 
@@ -1480,7 +1492,7 @@ def retry_write(
     for attempt in range(retries):
         fs = store.branches[branch]
         try:
-            return fs.write(path, data, message=message, mode=mode)
+            return fs.write(path, data, message=message, mode=mode, parents=parents)
         except StaleSnapshotError:
             if attempt == retries - 1:
                 raise

@@ -13,6 +13,7 @@ class Batch internal constructor(
     private val _fs: Fs,
     private val message: String?,
     private val operation: String?,
+    private val parents: List<Fs> = emptyList(),
 ) : AutoCloseable {
 
     private val writes = mutableListOf<Pair<String, TreeWrite?>>()
@@ -176,7 +177,7 @@ class Batch internal constructor(
             return _fs
         }
 
-        fs = _fs.commitChanges(writes, message, operation)
+        fs = _fs.commitChanges(writes, message, operation, parents)
         closed = true
         return fs!!
     }
@@ -189,7 +190,7 @@ class Batch internal constructor(
             closed = true
             return
         }
-        fs = _fs.commitChanges(writes, message, operation)
+        fs = _fs.commitChanges(writes, message, operation, parents)
         closed = true
     }
 }

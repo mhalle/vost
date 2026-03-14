@@ -490,6 +490,7 @@ class Fs internal constructor(
         data: ByteArray,
         message: String? = null,
         mode: FileType? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         val filemode = mode?.filemode() ?: GIT_FILEMODE_BLOB
         val normalized = normalizePath(path)
@@ -498,7 +499,7 @@ class Fs internal constructor(
             val blobId = inserter.insert(Constants.OBJ_BLOB, data)
             inserter.flush()
             val writes = listOf(Pair(normalized, TreeWrite(blobId, filemode) as TreeWrite?))
-            return commitChanges(writes, message)
+            return commitChanges(writes, message, parents = parents)
         } finally {
             inserter.close()
         }
@@ -522,7 +523,8 @@ class Fs internal constructor(
         encoding: String = "UTF-8",
         message: String? = null,
         mode: FileType? = null,
-    ): Fs = write(path, text.toByteArray(charset(encoding)), message, mode)
+        parents: List<Fs> = emptyList(),
+    ): Fs = write(path, text.toByteArray(charset(encoding)), message, mode, parents)
 
     /**
      * Write a local file into the repo and commit, returning a new Fs.
@@ -542,6 +544,7 @@ class Fs internal constructor(
         localPath: String,
         message: String? = null,
         mode: FileType? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         val file = java.io.File(localPath)
         val data = file.readBytes()
@@ -553,7 +556,7 @@ class Fs internal constructor(
             val blobId = inserter.insert(Constants.OBJ_BLOB, data)
             inserter.flush()
             val writes = listOf(Pair(normalized, TreeWrite(blobId, filemode) as TreeWrite?))
-            return commitChanges(writes, message)
+            return commitChanges(writes, message, parents = parents)
         } finally {
             inserter.close()
         }
@@ -569,14 +572,14 @@ class Fs internal constructor(
      * @throws PermissionError If this snapshot is read-only.
      * @throws StaleSnapshotError If the branch has advanced since this snapshot.
      */
-    fun writeSymlink(path: String, target: String, message: String? = null): Fs {
+    fun writeSymlink(path: String, target: String, message: String? = null, parents: List<Fs> = emptyList()): Fs {
         val normalized = normalizePath(path)
         val inserter = store.repo.newObjectInserter()
         try {
             val blobId = inserter.insert(Constants.OBJ_BLOB, target.toByteArray(Charsets.UTF_8))
             inserter.flush()
             val writes = listOf(Pair(normalized, TreeWrite(blobId, GIT_FILEMODE_LINK) as TreeWrite?))
-            return commitChanges(writes, message)
+            return commitChanges(writes, message, parents = parents)
         } finally {
             inserter.close()
         }
@@ -598,6 +601,7 @@ class Fs internal constructor(
         removes: Collection<String>? = null,
         message: String? = null,
         operation: String? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         val inserter = store.repo.newObjectInserter()
         try {
@@ -635,7 +639,7 @@ class Fs internal constructor(
             }
 
             inserter.flush()
-            return commitChanges(internalWrites, message, operation)
+            return commitChanges(internalWrites, message, operation, parents)
         } finally {
             inserter.close()
         }
@@ -667,9 +671,9 @@ class Fs internal constructor(
      * @return A new [Batch] instance.
      * @throws PermissionError If this snapshot is read-only.
      */
-    fun batch(message: String? = null, operation: String? = null): Batch {
+    fun batch(message: String? = null, operation: String? = null, parents: List<Fs> = emptyList()): Batch {
         if (!writable) throw readonlyError("batch on")
-        return Batch(this, message, operation)
+        return Batch(this, message, operation, parents)
     }
 
     /**
@@ -1220,6 +1224,7 @@ class Fs internal constructor(
         writes: List<Pair<String, TreeWrite?>>,
         message: String?,
         operation: String? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         if (!writable) throw readonlyError("write to")
 
@@ -1252,7 +1257,11 @@ class Fs internal constructor(
                 val sig = store.signature
                 val commit = CommitBuilder()
                 commit.setTreeId(newTreeId)
-                commit.setParentId(commitId)
+                val allParentIds = mutableListOf(commitId)
+                for (p in parents) {
+                    allParentIds.add(p.commitId)
+                }
+                commit.setParentIds(allParentIds)
                 commit.setAuthor(PersonIdent(sig.name, sig.email))
                 commit.setCommitter(commit.author)
                 commit.setMessage(if (finalMessage.endsWith("\n")) finalMessage else "$finalMessage\n")

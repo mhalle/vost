@@ -691,8 +691,10 @@ def mv(ctx, args, recursive, dry_run, no_glob, branch, message, tag, force_tag):
 @_tag_option
 @click.option("-p", "--passthrough", is_flag=True, default=False,
               help="Echo stdin to stdout (tee mode for pipelines).")
+@click.option("--parent", "parent_refs", multiple=True,
+              help="Additional parent ref (branch/tag/hash). Repeatable.")
 @click.pass_context
-def write(ctx, path, branch, message, no_create, tag, force_tag, passthrough):
+def write(ctx, path, branch, message, no_create, tag, force_tag, passthrough, parent_refs):
     """Write stdin to a file in the repo."""
     from ..fs import retry_write
 
@@ -731,9 +733,12 @@ def write(ctx, path, branch, message, no_create, tag, force_tag, passthrough):
     else:
         data = sys.stdin.buffer.read()
 
+    # Resolve advisory parent refs
+    parents = [_get_fs(store, None, r) for r in parent_refs] if parent_refs else None
+
     # Stage 3: commit (fetches fresh FS internally, retries on stale)
     try:
-        new_fs = retry_write(store, branch, repo_path_norm, data, message=message)
+        new_fs = retry_write(store, branch, repo_path_norm, data, message=message, parents=parents)
     except StaleSnapshotError:
         raise click.ClickException(
             "Branch modified concurrently — retry"

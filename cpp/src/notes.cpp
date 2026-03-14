@@ -396,8 +396,12 @@ void NoteNamespace::commit_note_tree(const std::string& new_tree_hex,
         }
 
         // Create commit (don't set ref yet)
+        std::vector<std::string> parent_oids;
+        if (!parent_hex.empty()) {
+            parent_oids.push_back(parent_hex);
+        }
         std::string commit_hex = tree::write_commit(
-            inner_->repo, new_tree_hex, parent_hex,
+            inner_->repo, new_tree_hex, parent_oids,
             inner_->signature, message);
 
         // CAS ref update

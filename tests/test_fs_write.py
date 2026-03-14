@@ -681,12 +681,12 @@ class TestRetryWrite:
         call_count = 0
         orig_write = type(fs).write
 
-        def patched_write(self, path, data, *, message=None, mode=None):
+        def patched_write(self, path, data, *, message=None, mode=None, parents=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise StaleSnapshotError("simulated stale")
-            return orig_write(self, path, data, message=message, mode=mode)
+            return orig_write(self, path, data, message=message, mode=mode, parents=parents)
 
         import unittest.mock
         with unittest.mock.patch.object(type(fs), 'write', patched_write):
@@ -701,7 +701,7 @@ class TestRetryWrite:
 
         import unittest.mock
 
-        def always_stale(self, path, data, *, message=None, mode=None):
+        def always_stale(self, path, data, *, message=None, mode=None, parents=None):
             raise StaleSnapshotError("always stale")
 
         from vost.fs import FS

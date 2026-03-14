@@ -105,6 +105,7 @@ private:
     std::vector<std::string> removes_;
     std::optional<std::string>               message_;
     std::optional<std::string>               operation_;
+    std::vector<std::string>                 parents_;
     std::optional<Fs>                        result_fs_;
     bool                                     closed_ = false;
 };

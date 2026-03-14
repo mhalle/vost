@@ -34,6 +34,7 @@ export class Batch {
   private _gitdir: string;
   private _message: string | null;
   private _operation: string | null;
+  private _parents: FS[] | undefined;
   private _writes = new Map<string, TreeWrite>();
   private _removes = new Set<string>();
   private _closed = false;
@@ -41,7 +42,7 @@ export class Batch {
   /** The resulting FS snapshot after commit. Null until commit() completes. */
   fs: FS | null = null;
 
-  constructor(fs: FS, message?: string | null, operation?: string | null) {
+  constructor(fs: FS, message?: string | null, operation?: string | null, parents?: FS[]) {
     if (!fs._writable) {
       throw new PermissionError('Cannot batch on a read-only snapshot');
     }
@@ -51,6 +52,7 @@ export class Batch {
     this._gitdir = fs._store._gitdir;
     this._message = message ?? null;
     this._operation = operation ?? null;
+    this._parents = parents;
   }
 
   private _checkOpen(): void {
@@ -186,6 +188,7 @@ export class Batch {
       this._removes,
       this._message,
       this._operation,
+      this._parents,
     );
     return this.fs;
   }

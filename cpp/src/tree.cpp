@@ -539,7 +539,7 @@ std::string rebuild_tree(
 std::string write_commit(
     git_repository* repo,
     const std::string& tree_oid_hex,
-    const std::string& parent_commit_oid_hex,  ///< May be empty for initial.
+    const std::vector<std::string>& parent_oids,  ///< May be empty for initial.
     const Signature&   sig,
     const std::string& message)
 {
@@ -563,15 +563,28 @@ std::string write_commit(
         ~SigGuard() { git_signature_free(s); }
     } sg{author_sig};
 
-    // Parents
+    // Parents — look up each parent commit object
+    std::vector<git_commit*> parent_commits;
+    // RAII cleanup for all parent commits
+    struct ParentsGuard {
+        std::vector<git_commit*>& commits;
+        ~ParentsGuard() {
+            for (auto* c : commits) {
+                if (c) git_commit_free(c);
+            }
+        }
+    } pg{parent_commits};
+
     std::vector<const git_commit*> parents_vec;
-    CommitGuard parent_guard;
-    if (!parent_commit_oid_hex.empty()) {
-        git_oid parent_oid = hex_to_oid(parent_commit_oid_hex);
-        if (git_commit_lookup(&parent_guard.c, repo, &parent_oid) != 0) {
+    for (const auto& oid_hex : parent_oids) {
+        if (oid_hex.empty()) continue;
+        git_oid parent_oid = hex_to_oid(oid_hex);
+        git_commit* c = nullptr;
+        if (git_commit_lookup(&c, repo, &parent_oid) != 0) {
             throw_git_error("git_commit_lookup (parent)");
         }
-        parents_vec.push_back(parent_guard.c);
+        parent_commits.push_back(c);
+        parents_vec.push_back(c);
     }
 
     git_oid new_commit_oid;
