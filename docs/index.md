@@ -31,4 +31,6 @@ print(fs.read("hello.txt"))  # b'Hello, world!'
 
 ## More
 
-The top-level [README](https://github.com/mhalle/vost#readme) covers core concepts, concurrency safety, error handling, and development setup.
+- [GitHub Repository](https://github.com/mhalle/vost) -- source code, issues, and releases
+- [README](https://github.com/mhalle/vost#readme) -- core concepts, concurrency safety, error handling, and development setup
+- [PyPI](https://pypi.org/project/vost/) -- `pip install vost`
