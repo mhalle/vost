@@ -478,7 +478,7 @@ vost is available in five languages. Each port provides the same core API:
 |----------|-----------|---------|---------|
 | **Python** | (this directory) | [dulwich](https://www.dulwich.io/) | `pip install vost` |
 | **TypeScript** | [`ts/`](ts/) | [isomorphic-git](https://isomorphic-git.org/) | `npm install @mhalle/vost` |
-| **Rust** | [`rs/`](rs/) | [gitoxide](https://github.com/GitoxideLabs/gitoxide) | `cargo add vost` |
+| **Rust** | [`rs/`](rs/) | [libgit2](https://libgit2.org/) (via [git2](https://crates.io/crates/git2)) | `cargo add vost` |
 | **Kotlin** | [`kotlin/`](kotlin/) | [JGit](https://www.eclipse.org/jgit/) | source dependency |
 | **C++** | [`cpp/`](cpp/) | [libgit2](https://libgit2.org/) | CMake / vcpkg |
 
