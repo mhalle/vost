@@ -45,9 +45,12 @@ def branch_list(ctx):
               help="Create an empty root branch (no parent commit).")
 @click.option("--squash", is_flag=True, default=False,
               help="Squash to a single commit (no history).")
+@click.option("--append", is_flag=True, default=False,
+              help="Append source tree as a new commit on the branch tip. "
+                   "Combine with --squash to collapse source history.")
 @_snapshot_options
 @click.pass_context
-def branch_set(ctx, name, branch, force, empty, squash, ref, at_path, match_pattern, before, back):
+def branch_set(ctx, name, branch, force, empty, squash, append, ref, at_path, match_pattern, before, back):
     """Create or update branch NAME.
 
     By default forks from the current branch. Use --empty for a new root branch.
@@ -55,10 +58,25 @@ def branch_set(ctx, name, branch, force, empty, squash, ref, at_path, match_patt
     """
     store = _open_store(_require_repo(ctx))
 
-    if name in store.branches and not force:
+    if append:
+        if empty:
+            raise click.ClickException("--append cannot be combined with --empty")
+        if name not in store.branches:
+            raise click.ClickException(f"--append requires existing branch: {name}")
+        branch = branch or _current_branch(store)
+        source_fs = _resolve_fs(store, branch, ref=ref, at_path=at_path,
+                                match_pattern=match_pattern, before=before, back=back)
+        tip = store.branches[name]
+        appended = source_fs.squash(parent=tip)
+        from ..fs import FS
+        new_fs = FS(store, appended._commit_oid, ref_name=name)
+        try:
+            store.branches[name] = new_fs
+        except ValueError as e:
+            raise click.ClickException(str(e))
+    elif name in store.branches and not force:
         raise click.ClickException(f"Branch already exists: {name}")
-
-    if empty:
+    elif empty:
         if ref or at_path or match_pattern or before or back:
             raise click.ClickException(
                 "--empty cannot be combined with --ref/--path/--match/--before/--back")

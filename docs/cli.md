@@ -534,6 +534,11 @@ vost branch delete dev
 vost branch hash main                     # tip commit SHA
 vost branch hash main --back 3            # 3 commits before tip
 vost branch hash main --path config.json  # last commit that changed file
+
+# Squash and append
+vost branch set snapshot --ref main --squash        # main's tree, no history
+vost branch set main --squash -f                    # squash main in place
+vost branch set main --append --ref feature         # append feature's tree onto main
 ```
 
 #### branch set options
@@ -543,6 +548,8 @@ vost branch hash main --path config.json  # last commit that changed file
 | `-b`, `--branch` | Source branch (default: current branch). |
 | `-f`, `--force` | Overwrite if branch already exists. |
 | `--empty` | Create an empty root branch (no parent commit). Cannot combine with other options. |
+| `--squash` | Collapse source to a single commit (no history). |
+| `--append` | Append source tree as a new commit on the target branch's tip. Requires the branch to exist. |
 | `--ref`, `--path`, `--match`, `--before`, `--back` | Snapshot filters. |
 
 #### branch current

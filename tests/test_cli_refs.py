@@ -158,6 +158,38 @@ class TestBranchSet:
         ])
         assert result.exit_code == 0, result.output
 
+    def test_set_append_squash(self, runner, repo_with_files):
+        """branch set --append --squash appends source tree onto branch tip."""
+        from vost import GitStore
+        # Create a feature branch with different content
+        runner.invoke(main, ["branch", "--repo", repo_with_files, "set", "feature"])
+        store = GitStore.open(repo_with_files, create=False)
+        store.branches["feature"].write("new.txt", b"feature data")
+
+        # Get main's current commit hash
+        main_before = store.branches["main"].commit_hash
+
+        result = runner.invoke(main, [
+            "branch", "--repo", repo_with_files, "set", "main",
+            "--append", "--ref", "feature"
+        ])
+        assert result.exit_code == 0, result.output
+
+        store = GitStore.open(repo_with_files, create=False)
+        fs = store.branches["main"]
+        assert fs.read("new.txt") == b"feature data"
+        assert fs.parent is not None
+        assert fs.parent.commit_hash == main_before
+
+    def test_set_append_requires_existing_branch(self, runner, repo_with_files):
+        """--append on a nonexistent branch fails."""
+        result = runner.invoke(main, [
+            "branch", "--repo", repo_with_files, "set", "nonexistent",
+            "--append", "--ref", "main"
+        ])
+        assert result.exit_code != 0
+        assert "existing branch" in result.output.lower()
+
     def test_set_squash(self, runner, repo_with_files):
         """branch set --squash creates a single-commit branch."""
         from vost import GitStore
