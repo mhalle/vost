@@ -899,6 +899,7 @@ class FS:
         ignore_errors: bool = False,
         checksum: bool = True,
         exclude: ExcludeFilter | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Copy local files into the repo.
 
@@ -931,6 +932,7 @@ class FS:
             follow_symlinks=follow_symlinks, message=message, mode=mode,
             ignore_existing=ignore_existing, delete=delete,
             ignore_errors=ignore_errors, checksum=checksum, exclude=exclude,
+            parents=parents,
         )
 
     def copy_out(
@@ -979,6 +981,7 @@ class FS:
         ignore_errors: bool = False,
         checksum: bool = True,
         exclude: ExcludeFilter | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Make *repo_path* identical to *local_path* (including deletes).
 
@@ -1002,6 +1005,7 @@ class FS:
             self, local_path, repo_path, dry_run=dry_run,
             message=message, ignore_errors=ignore_errors,
             checksum=checksum, exclude=exclude,
+            parents=parents,
         )
 
     def sync_out(
@@ -1038,6 +1042,7 @@ class FS:
         recursive: bool = False,
         dry_run: bool = False,
         message: str | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Remove files from the repo.
 
@@ -1061,6 +1066,7 @@ class FS:
         return _remove(
             self, sources, dry_run=dry_run,
             recursive=recursive, message=message,
+            parents=parents,
         )
 
     def move(
@@ -1071,6 +1077,7 @@ class FS:
         recursive: bool = False,
         dry_run: bool = False,
         message: str | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Move or rename files within the repo.
 
@@ -1094,6 +1101,7 @@ class FS:
         return _move(
             self, sources, dest, dry_run=dry_run,
             recursive=recursive, message=message,
+            parents=parents,
         )
 
     def copy_from_ref(
@@ -1105,6 +1113,7 @@ class FS:
         delete: bool = False,
         dry_run: bool = False,
         message: str | None = None,
+        parents: list[FS] | None = None,
     ) -> FS:
         """Copy files from *source* into this branch in a single atomic commit.
 
@@ -1253,7 +1262,7 @@ class FS:
             self._changes = _finalize_changes(changes)
             return self
 
-        return self._commit_changes(writes, removes, message, operation="cp")
+        return self._commit_changes(writes, removes, message, operation="cp", parents=parents)
 
     # --- History ---
 

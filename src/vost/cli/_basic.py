@@ -524,8 +524,10 @@ def hash_cmd(ctx, target, branch, ref, at_path, match_pattern, before, back):
 @_branch_option
 @_message_option
 @_tag_option
+@click.option("--parent", "parent_refs", multiple=True,
+              help="Additional parent ref (branch/tag/hash). Repeatable.")
 @click.pass_context
-def rm(ctx, paths, recursive, dry_run, no_glob, branch, message, tag, force_tag):
+def rm(ctx, paths, recursive, dry_run, no_glob, branch, message, tag, force_tag, parent_refs):
     """Remove files from the repo.
 
     Accepts multiple paths and glob patterns.  Quote glob patterns to
@@ -551,6 +553,8 @@ def rm(ctx, paths, recursive, dry_run, no_glob, branch, message, tag, force_tag)
     if not no_glob:
         patterns = _expand_sources_repo(fs, patterns)
 
+    parents = [_get_fs(store, None, r) for r in parent_refs] if parent_refs else None
+
     try:
         if dry_run:
             result_fs = fs.remove(patterns, recursive=recursive,
@@ -561,7 +565,7 @@ def rm(ctx, paths, recursive, dry_run, no_glob, branch, message, tag, force_tag)
                     click.echo(f"- :{action.path}")
         else:
             new_fs = fs.remove(patterns, recursive=recursive,
-                               message=message)
+                               message=message, parents=parents)
             if tag:
                 _apply_tag(store, new_fs, tag, force_tag)
             changes = new_fs.changes
@@ -591,8 +595,10 @@ def rm(ctx, paths, recursive, dry_run, no_glob, branch, message, tag, force_tag)
 @_branch_option
 @_message_option
 @_tag_option
+@click.option("--parent", "parent_refs", multiple=True,
+              help="Additional parent ref (branch/tag/hash). Repeatable.")
 @click.pass_context
-def mv(ctx, args, recursive, dry_run, no_glob, branch, message, tag, force_tag):
+def mv(ctx, args, recursive, dry_run, no_glob, branch, message, tag, force_tag, parent_refs):
     """Move/rename files in the repo.
 
     All arguments are repo paths (colon prefix required). The last
@@ -644,6 +650,8 @@ def mv(ctx, args, recursive, dry_run, no_glob, branch, message, tag, force_tag):
     else:
         dest_path = ""
 
+    parents = [_get_fs(store, None, r) for r in parent_refs] if parent_refs else None
+
     try:
         if dry_run:
             result_fs = fs.move(
@@ -659,6 +667,7 @@ def mv(ctx, args, recursive, dry_run, no_glob, branch, message, tag, force_tag):
             new_fs = fs.move(
                 source_patterns, dest_path,
                 recursive=recursive, message=message,
+                parents=parents,
             )
             if tag:
                 _apply_tag(store, new_fs, tag, force_tag)

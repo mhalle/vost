@@ -297,6 +297,7 @@ struct RemoveOptions {
     bool                       recursive = false;
     bool                       dry_run   = false;
     std::optional<std::string> message;
+    std::vector<std::string>   parents;   ///< Advisory extra parent commit hashes.
 };
 
 // ---------------------------------------------------------------------------
@@ -343,6 +344,7 @@ struct CopyInOptions {
     std::optional<std::string>              message; ///< Commit message.
     bool                                    dry_run   = false;
     bool                                    checksum  = true; ///< Skip unchanged files.
+    std::vector<std::string>                parents;  ///< Advisory extra parent commit hashes.
 };
 
 // ---------------------------------------------------------------------------
@@ -366,6 +368,7 @@ struct SyncOptions {
     std::optional<std::string>              message;
     bool                                    dry_run   = false;
     bool                                    checksum  = true;
+    std::vector<std::string>                parents;  ///< Advisory extra parent commit hashes.
 };
 
 // ---------------------------------------------------------------------------
@@ -377,6 +380,7 @@ struct MoveOptions {
     bool                       recursive = false;
     bool                       dry_run   = false;
     std::optional<std::string> message;
+    std::vector<std::string>   parents;   ///< Advisory extra parent commit hashes.
 };
 
 // ---------------------------------------------------------------------------
@@ -388,6 +392,7 @@ struct CopyFromRefOptions {
     bool                       delete_extra = false; ///< Delete files in dest not in source.
     bool                       dry_run      = false;
     std::optional<std::string> message;
+    std::vector<std::string>   parents;   ///< Advisory extra parent commit hashes.
 };
 
 // ---------------------------------------------------------------------------

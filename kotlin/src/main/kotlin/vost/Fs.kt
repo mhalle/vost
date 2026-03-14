@@ -657,10 +657,11 @@ class Fs internal constructor(
     fun remove(
         paths: List<String>,
         message: String? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         val removes = paths.map { normalizePath(it) }
         val writes = removes.map { Pair(it, null as TreeWrite?) }
-        return commitChanges(writes, message)
+        return commitChanges(writes, message, parents = parents)
     }
 
     /**
@@ -709,7 +710,7 @@ class Fs internal constructor(
      * @throws java.io.FileNotFoundException If [src] does not exist.
      * @throws StaleSnapshotError If the branch has advanced since this snapshot.
      */
-    fun rename(src: String, dest: String, message: String? = null): Fs {
+    fun rename(src: String, dest: String, message: String? = null, parents: List<Fs> = emptyList()): Fs {
         val srcNorm = normalizePath(src)
         val destNorm = normalizePath(dest)
         if (srcNorm == destNorm) throw IllegalArgumentException("Source and destination are the same: $srcNorm")
@@ -718,7 +719,7 @@ class Fs internal constructor(
 
         if (mode == FileMode.TREE.bits) {
             // Directory rename: copy all files, then remove originals
-            val batch = batch(message = message, operation = "mv")
+            val batch = batch(message = message, operation = "mv", parents = parents)
             for (entry in walk(srcNorm)) {
                 for (file in entry.files) {
                     val srcFile = if (entry.dirpath.isEmpty()) file.name else "${entry.dirpath}/${file.name}"
@@ -744,7 +745,7 @@ class Fs internal constructor(
                     Pair(srcNorm, null as TreeWrite?),
                 )
                 inserter.flush()
-                return commitChanges(writes, message, "mv")
+                return commitChanges(writes, message, "mv", parents)
             } finally {
                 inserter.close()
             }
@@ -764,9 +765,9 @@ class Fs internal constructor(
      * @throws java.io.FileNotFoundException If a source path does not exist.
      * @throws StaleSnapshotError If the branch has advanced since this snapshot.
      */
-    fun move(sources: List<String>, dest: String, message: String? = null): Fs {
+    fun move(sources: List<String>, dest: String, message: String? = null, parents: List<Fs> = emptyList()): Fs {
         val destNorm = if (dest.trimEnd('/').isNotEmpty()) normalizePath(dest.trimEnd('/')) else ""
-        val batch = batch(message = message, operation = "mv")
+        val batch = batch(message = message, operation = "mv", parents = parents)
 
         for (src in sources) {
             val srcNorm = normalizePath(src)
@@ -822,7 +823,8 @@ class Fs internal constructor(
         message: String? = null,
         delete: Boolean = false,
         exclude: ExcludeFilter? = null,
-    ): Fs = CopyOps.copyIn(this, sources, dest, message = message, delete = delete, exclude = exclude)
+        parents: List<Fs> = emptyList(),
+    ): Fs = CopyOps.copyIn(this, sources, dest, message = message, delete = delete, exclude = exclude, parents = parents)
 
     /**
      * Copy repo files to local disk.
@@ -855,7 +857,8 @@ class Fs internal constructor(
         repoPath: String,
         message: String? = null,
         exclude: ExcludeFilter? = null,
-    ): Fs = CopyOps.syncIn(this, localPath, repoPath, message = message, exclude = exclude)
+        parents: List<Fs> = emptyList(),
+    ): Fs = CopyOps.syncIn(this, localPath, repoPath, message = message, exclude = exclude, parents = parents)
 
     /**
      * Sync from the repo to local disk (copy + delete extras on disk).
@@ -892,6 +895,7 @@ class Fs internal constructor(
         dest: String = "",
         delete: Boolean = false,
         message: String? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         val resolved = if (source in store.branches) {
             store.branches[source]
@@ -900,7 +904,7 @@ class Fs internal constructor(
         } else {
             throw IllegalArgumentException("Cannot resolve '$source': not a branch or tag")
         }
-        return copyFromRef(resolved, sources, dest, delete, message)
+        return copyFromRef(resolved, sources, dest, delete, message, parents)
     }
 
     /**
@@ -925,6 +929,7 @@ class Fs internal constructor(
         dest: String = "",
         delete: Boolean = false,
         message: String? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         if (source.store !== store) {
             throw IllegalArgumentException("source must belong to the same repo as self")
@@ -1036,7 +1041,7 @@ class Fs internal constructor(
 
         if (writes.isEmpty()) return this
 
-        return commitChanges(writes, message, "cp")
+        return commitChanges(writes, message, "cp", parents)
     }
 
     // ── History ───────────────────────────────────────────────────────

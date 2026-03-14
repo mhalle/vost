@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as nodeFs from 'node:fs';
+import * as path from 'node:path';
 import git from 'isomorphic-git';
-import { freshStore, toBytes, fromBytes, rmTmpDir, fs } from './helpers.js';
+import { freshStore, toBytes, fromBytes, rmTmpDir, makeTmpDir, fs } from './helpers.js';
 import { GitStore, FS } from '../src/index.js';
 
 let store: GitStore;
@@ -113,5 +115,86 @@ describe('parents', () => {
     const parents = await readCommitParents(store._gitdir, f2.commitHash);
     expect(parents.length).toBe(2);
     expect(parents[1]).toBe(otherFs2.commitHash);
+  });
+
+  it('remove with parents', async () => {
+    const otherFs = await store.branches.setAndGet('other', snap);
+    const otherFs2 = await otherFs.write('b.txt', toBytes('b'));
+
+    const f2 = await snap.remove('a.txt', { parents: [otherFs2] });
+    const parents = await readCommitParents(store._gitdir, f2.commitHash);
+    expect(parents.length).toBe(2);
+    expect(parents[0]).toBe(snap.commitHash);
+    expect(parents[1]).toBe(otherFs2.commitHash);
+    expect(await f2.exists('a.txt')).toBe(false);
+  });
+
+  it('move with parents', async () => {
+    const otherFs = await store.branches.setAndGet('other', snap);
+    const otherFs2 = await otherFs.write('b.txt', toBytes('b'));
+
+    const f2 = await snap.move('a.txt', 'renamed.txt', { parents: [otherFs2] });
+    const parents = await readCommitParents(store._gitdir, f2.commitHash);
+    expect(parents.length).toBe(2);
+    expect(parents[0]).toBe(snap.commitHash);
+    expect(parents[1]).toBe(otherFs2.commitHash);
+    expect(await f2.exists('renamed.txt')).toBe(true);
+    expect(await f2.exists('a.txt')).toBe(false);
+  });
+
+  it('copyFromRef with parents', async () => {
+    const otherFs = await store.branches.setAndGet('other', snap);
+    const otherFs2 = await otherFs.write('b.txt', toBytes('b'));
+
+    const thirdFs = await store.branches.setAndGet('third', snap);
+    const thirdFs2 = await thirdFs.write('c.txt', toBytes('c'));
+
+    // Copy from third into main, with other as extra parent
+    const f2 = await snap.copyFromRef(thirdFs2, ['c.txt'], '', { parents: [otherFs2] });
+    const parents = await readCommitParents(store._gitdir, f2.commitHash);
+    expect(parents.length).toBe(2);
+    expect(parents[0]).toBe(snap.commitHash);
+    expect(parents[1]).toBe(otherFs2.commitHash);
+    expect(await f2.exists('c.txt')).toBe(true);
+  });
+
+  it('copyIn with parents', async () => {
+    const otherFs = await store.branches.setAndGet('other', snap);
+    const otherFs2 = await otherFs.write('b.txt', toBytes('b'));
+
+    // Write a file to disk to copy in
+    const diskDir = makeTmpDir();
+    try {
+      nodeFs.writeFileSync(path.join(diskDir, 'disk.txt'), 'from-disk');
+
+      const f2 = await snap.copyIn([path.join(diskDir, 'disk.txt')], '', { parents: [otherFs2] });
+      const parents = await readCommitParents(store._gitdir, f2.commitHash);
+      expect(parents.length).toBe(2);
+      expect(parents[0]).toBe(snap.commitHash);
+      expect(parents[1]).toBe(otherFs2.commitHash);
+      expect(await f2.exists('disk.txt')).toBe(true);
+    } finally {
+      nodeFs.rmSync(diskDir, { recursive: true, force: true });
+    }
+  });
+
+  it('syncIn with parents', async () => {
+    const otherFs = await store.branches.setAndGet('other', snap);
+    const otherFs2 = await otherFs.write('b.txt', toBytes('b'));
+
+    // Write files to disk to sync in
+    const diskDir = makeTmpDir();
+    try {
+      nodeFs.writeFileSync(path.join(diskDir, 'synced.txt'), 'synced');
+
+      const f2 = await snap.syncIn(diskDir, '', { parents: [otherFs2] });
+      const parents = await readCommitParents(store._gitdir, f2.commitHash);
+      expect(parents.length).toBe(2);
+      expect(parents[0]).toBe(snap.commitHash);
+      expect(parents[1]).toBe(otherFs2.commitHash);
+      expect(await f2.exists('synced.txt')).toBe(true);
+    } finally {
+      nodeFs.rmSync(diskDir, { recursive: true, force: true });
+    }
   });
 });

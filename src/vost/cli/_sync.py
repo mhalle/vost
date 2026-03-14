@@ -27,6 +27,7 @@ from ._helpers import (
     _open_store,
     _open_or_create_store,
     _current_branch,
+    _get_fs,
     _resolve_fs,
     _snapshot_options,
     _tag_option,
@@ -55,8 +56,10 @@ from ._helpers import (
               help="Watch for changes and sync continuously (disk→repo only).")
 @click.option("--debounce", type=int, default=2000,
               help="Debounce delay in ms for --watch (default: 2000).")
+@click.option("--parent", "parent_refs", multiple=True,
+              help="Additional parent ref (branch/tag/hash). Repeatable.")
 @click.pass_context
-def sync(ctx, args, branch, ref, at_path, match_pattern, before, back, message, dry_run, exclude, exclude_from, use_gitignore, ignore_errors, checksum, no_create, tag, force_tag, watch, debounce):
+def sync(ctx, args, branch, ref, at_path, match_pattern, before, back, message, dry_run, exclude, exclude_from, use_gitignore, ignore_errors, checksum, no_create, tag, force_tag, watch, debounce, parent_refs):
     """Make one path identical to another (like rsync --delete).
 
     Requires --repo or VOST_REPO environment variable.
@@ -154,6 +157,7 @@ def sync(ctx, args, branch, ref, at_path, match_pattern, before, back, message, 
         # ---- Repo → repo sync ----
         store = _open_store(repo_path)
         branch = branch or _current_branch(store)
+        parents = [_get_fs(store, None, r) for r in parent_refs] if parent_refs else None
 
         # Resolve source
         if src_rp.ref or src_rp.back:
@@ -171,7 +175,8 @@ def sync(ctx, args, branch, ref, at_path, match_pattern, before, back, message, 
         dest_repo_path = dest_rp.path.rstrip("/")
 
         _sync_repo_to_repo(ctx, store, src_fs, dest_fs, src_repo_path,
-                           dest_repo_path, dry_run, message, ignore_errors)
+                           dest_repo_path, dry_run, message, ignore_errors,
+                           parents=parents)
         return
 
     if direction == "to_repo" and not dry_run and not no_create:
@@ -180,6 +185,8 @@ def sync(ctx, args, branch, ref, at_path, match_pattern, before, back, message, 
     else:
         store = _open_store(repo_path)
         branch = branch or _current_branch(store)
+
+    parents = [_get_fs(store, None, r) for r in parent_refs] if parent_refs else None
 
     if watch:
         from ._watch import watch_and_sync
@@ -219,6 +226,7 @@ def sync(ctx, args, branch, ref, at_path, match_pattern, before, back, message, 
                     local_path, repo_dest,
                     message=message, ignore_errors=ignore_errors,
                     checksum=checksum, exclude=excl,
+                    parents=parents,
                 )
                 changes = _new_fs.changes
                 if changes:
@@ -265,7 +273,7 @@ def sync(ctx, args, branch, ref, at_path, match_pattern, before, back, message, 
 
 
 def _sync_repo_to_repo(ctx, store, src_fs, dest_fs, src_repo_path, dest_repo_path,
-                         dry_run, message, ignore_errors):
+                         dry_run, message, ignore_errors, *, parents=None):
     """Sync one repo path to another (like rsync --delete between refs)."""
     from ..copy._resolve import _walk_repo
 
@@ -296,7 +304,7 @@ def _sync_repo_to_repo(ctx, store, src_fs, dest_fs, src_repo_path, dest_repo_pat
                 full = f"{dest_repo_path}/{p}" if dest_repo_path else p
                 click.echo(f"~ :{full}")
         else:
-            with dest_fs.batch(message=message, operation="sync") as b:
+            with dest_fs.batch(message=message, operation="sync", parents=parents) as b:
                 # Delete files not in source
                 for p in sorted(to_delete):
                     full = f"{dest_repo_path}/{p}" if dest_repo_path else p

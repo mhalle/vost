@@ -33,6 +33,7 @@ from ._helpers import (
     _open_store,
     _open_or_create_store,
     _current_branch,
+    _get_fs,
     _resolve_fs,
     _snapshot_options,
     _tag_option,
@@ -66,8 +67,10 @@ from ._helpers import (
 @_no_glob_option
 @_no_create_option
 @_tag_option
+@click.option("--parent", "parent_refs", multiple=True,
+              help="Additional parent ref (branch/tag/hash). Repeatable.")
 @click.pass_context
-def cp(ctx, args, branch, ref, at_path, match_pattern, before, back, message, file_type, deprecated_mode, follow_symlinks, dry_run, ignore_existing, delete, ignore_errors, checksum, no_glob, no_create, tag, force_tag, exclude, exclude_from):
+def cp(ctx, args, branch, ref, at_path, match_pattern, before, back, message, file_type, deprecated_mode, follow_symlinks, dry_run, ignore_existing, delete, ignore_errors, checksum, no_glob, no_create, tag, force_tag, exclude, exclude_from, parent_refs):
     """Copy files and directories between disk and repo, or between repo refs.
 
     Requires --repo or VOST_REPO environment variable.
@@ -154,6 +157,9 @@ def cp(ctx, args, branch, ref, at_path, match_pattern, before, back, message, fi
 
     repo_path = _require_repo(ctx)
 
+    # Resolve advisory parent refs (deferred until store is open)
+    _parent_refs = parent_refs
+
     if file_type:
         filemode = FileType(file_type).filemode
     elif deprecated_mode:
@@ -187,6 +193,7 @@ def cp(ctx, args, branch, ref, at_path, match_pattern, before, back, message, fi
             dest_fs = _resolve_fs(store, branch, ref, at_path=at_path,
                                   match_pattern=match_pattern, before=before, back=back)
         fs = dest_fs
+        parents = [_get_fs(store, None, r) for r in _parent_refs] if _parent_refs else None
 
         dest_path = parsed_dest.path
         if dest_path:
@@ -220,7 +227,7 @@ def cp(ctx, args, branch, ref, at_path, match_pattern, before, back, message, fi
                 if dry_run:
                     click.echo(f"{local} -> :{repo_file}")
                 else:
-                    with fs.batch(message=message, operation="cp") as b:
+                    with fs.batch(message=message, operation="cp", parents=parents) as b:
                         if not follow_symlinks and local.is_symlink():
                             b.write_symlink(repo_file, os.readlink(local))
                         else:
@@ -271,6 +278,7 @@ def cp(ctx, args, branch, ref, at_path, match_pattern, before, back, message, fi
                         ignore_errors=ignore_errors,
                         checksum=checksum,
                         exclude=excl,
+                        parents=parents,
                     )
                     changes = _new_fs.changes
                     if changes:
@@ -346,6 +354,7 @@ def cp(ctx, args, branch, ref, at_path, match_pattern, before, back, message, fi
         # ---- Repo → repo ----
         store = _open_store(repo_path)
         branch = branch or _current_branch(store)
+        parents = [_get_fs(store, None, r) for r in _parent_refs] if _parent_refs else None
 
         # Resolve dest
         dest_fs, dest_branch = _require_writable_ref(store, parsed_dest, branch)
@@ -411,7 +420,7 @@ def cp(ctx, args, branch, ref, at_path, match_pattern, before, back, message, fi
                     else:
                         click.echo(f"+ :{dp}")
             else:
-                with dest_fs.batch(message=message, operation="cp") as b:
+                with dest_fs.batch(message=message, operation="cp", parents=parents) as b:
                     # Handle --delete
                     if delete:
                         for rel in to_delete:

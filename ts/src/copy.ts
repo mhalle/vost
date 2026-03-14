@@ -698,6 +698,7 @@ export async function copyIn(
     checksum?: boolean;
     operation?: string;
     exclude?: ExcludeFilter;
+    parents?: FS[];
   } = {},
 ): Promise<FS> {
   const srcList = typeof sources === 'string' ? [sources] : sources;
@@ -797,7 +798,7 @@ export async function copyIn(
       return fs;
     }
 
-    const batch = fs.batch({ message: opts.message, operation: opts.operation ?? 'cp' });
+    const batch = fs.batch({ message: opts.message, operation: opts.operation ?? 'cp', parents: opts.parents });
     await writeFilesToRepo(batch, fsModule, writePairs, {
       followSymlinks: opts.followSymlinks,
       mode: opts.mode,
@@ -854,7 +855,7 @@ export async function copyIn(
   changes.add = makeEntriesFromDisk(fsModule, addRels, pairMap);
   changes.update = makeEntriesFromDisk(fsModule, updateRels, pairMap);
 
-  const batch = fs.batch({ message: opts.message, operation: opts.operation ?? 'cp' });
+  const batch = fs.batch({ message: opts.message, operation: opts.operation ?? 'cp', parents: opts.parents });
   await writeFilesToRepo(batch, fsModule, pairs, {
     followSymlinks: opts.followSymlinks,
     mode: opts.mode,
@@ -1132,7 +1133,7 @@ async function collectRemovePaths(
 export async function remove(
   fs: FS,
   sources: string | string[],
-  opts: { recursive?: boolean; dryRun?: boolean; message?: string } = {},
+  opts: { recursive?: boolean; dryRun?: boolean; message?: string; parents?: FS[] } = {},
 ): Promise<FS> {
   const srcList = typeof sources === 'string' ? [sources] : sources;
   const deletePaths = await collectRemovePaths(fs, srcList, opts.recursive);
@@ -1147,7 +1148,7 @@ export async function remove(
     return fs;
   }
 
-  const batch = fs.batch({ message: opts.message, operation: 'rm' });
+  const batch = fs.batch({ message: opts.message, operation: 'rm', parents: opts.parents });
   for (const path of deletePaths) {
     await batch.remove(path);
   }
@@ -1194,6 +1195,7 @@ export async function syncIn(
     ignoreErrors?: boolean;
     checksum?: boolean;
     exclude?: ExcludeFilter;
+    parents?: FS[];
   } = {},
 ): Promise<FS> {
   const src = localPath.endsWith('/') ? localPath : localPath + '/';
@@ -1223,7 +1225,7 @@ export async function syncIn(
             fs._changes = changes;
             return fs;
           }
-          const batch = fs.batch({ message: opts.message, operation: 'sync' });
+          const batch = fs.batch({ message: opts.message, operation: 'sync', parents: opts.parents });
           await batch.remove(dest);
           return await batch.commit();
         }
@@ -1236,7 +1238,7 @@ export async function syncIn(
         fs._changes = finalizeChanges(changes);
         return fs;
       }
-      const batch = fs.batch({ message: opts.message });
+      const batch = fs.batch({ message: opts.message, parents: opts.parents });
       for (const rel of [...repoFiles.keys()].sort()) {
         const full = dest ? `${dest}/${rel}` : rel;
         await batch.remove(full);
@@ -1346,7 +1348,7 @@ export async function move(
   fs: FS,
   sources: string | string[],
   dest: string,
-  opts: { recursive?: boolean; dryRun?: boolean; message?: string } = {},
+  opts: { recursive?: boolean; dryRun?: boolean; message?: string; parents?: FS[] } = {},
 ): Promise<FS> {
   const srcList = typeof sources === 'string' ? [sources] : sources;
   const resolved = await resolveRepoSources(fs, srcList);
@@ -1393,7 +1395,7 @@ export async function move(
     return fs;
   }
 
-  const batch = fs.batch({ message: opts.message, operation: 'mv' });
+  const batch = fs.batch({ message: opts.message, operation: 'mv', parents: opts.parents });
   for (const [src, dst] of pairs) {
     // Copy blob from src to dst
     const entry = await entryAtPath(fs._store._fsModule, fs._store._gitdir, fs._treeOid, src);

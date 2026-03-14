@@ -601,7 +601,7 @@ Fs Fs::remove(const std::vector<std::string>& paths_in, RemoveOptions opts) cons
         return *this;
     }
 
-    return commit_changes({}, to_remove, msg);
+    return commit_changes({}, to_remove, msg, std::nullopt, opts.parents);
 }
 
 // ---------------------------------------------------------------------------
@@ -688,7 +688,7 @@ Fs Fs::move(const std::vector<std::string>& sources,
     }
 
     std::string msg = paths::format_message("move", opts.message);
-    return commit_changes(writes, removes, msg);
+    return commit_changes(writes, removes, msg, std::nullopt, opts.parents);
 }
 
 // ---------------------------------------------------------------------------
@@ -779,7 +779,7 @@ Fs Fs::rename(const std::string& src, const std::string& dest,
         }
     }
 
-    return commit_changes(writes, removes, msg);
+    return commit_changes(writes, removes, msg, std::nullopt, opts.parents);
 }
 
 // ---------------------------------------------------------------------------

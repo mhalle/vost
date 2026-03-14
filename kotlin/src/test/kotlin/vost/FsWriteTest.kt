@@ -683,4 +683,89 @@ class FsWriteTest {
             assertEquals(3, parentCount(it, merged))
         }
     }
+
+    @Test
+    fun `remove with parents creates merge commit`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "main".toByteArray())
+            mainFs = mainFs.write("b.txt", "extra".toByteArray())
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.write("c.txt", "other".toByteArray())
+
+            val removed = mainFs.remove(listOf("b.txt"), parents = listOf(otherFs))
+            assertEquals(2, parentCount(it, removed))
+            assertFalse(removed.exists("b.txt"))
+            assertTrue(removed.exists("a.txt"))
+
+            val revWalk = RevWalk(it.repo)
+            try {
+                val commit = revWalk.parseCommit(removed.commitId)
+                assertEquals(mainFs.commitId, commit.getParent(0).id)
+                assertEquals(otherFs.commitId, commit.getParent(1).id)
+            } finally {
+                revWalk.close()
+            }
+        }
+    }
+
+    @Test
+    fun `rename with parents creates merge commit`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "main".toByteArray())
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.write("b.txt", "other".toByteArray())
+
+            val renamed = mainFs.rename("a.txt", "z.txt", parents = listOf(otherFs))
+            assertEquals(2, parentCount(it, renamed))
+            assertFalse(renamed.exists("a.txt"))
+            assertTrue(renamed.exists("z.txt"))
+        }
+    }
+
+    @Test
+    fun `move with parents creates merge commit`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "main".toByteArray())
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.write("b.txt", "other".toByteArray())
+
+            val moved = mainFs.move(listOf("a.txt"), "subdir", parents = listOf(otherFs))
+            assertEquals(2, parentCount(it, moved))
+            assertFalse(moved.exists("a.txt"))
+            assertTrue(moved.exists("subdir/a.txt"))
+        }
+    }
+
+    @Test
+    fun `copyFromRef with parents creates merge commit`() {
+        val store = createStore()
+        store.use {
+            var mainFs = it.branches["main"]
+            mainFs = mainFs.write("a.txt", "main".toByteArray())
+
+            it.branches["src"] = mainFs
+            var srcFs = it.branches["src"]
+            srcFs = srcFs.write("x.txt", "from-src".toByteArray())
+
+            it.branches["other"] = mainFs
+            var otherFs = it.branches["other"]
+            otherFs = otherFs.write("y.txt", "other".toByteArray())
+
+            val copied = mainFs.copyFromRef(srcFs, listOf("x.txt"), parents = listOf(otherFs))
+            assertEquals(2, parentCount(it, copied))
+            assertTrue(copied.exists("x.txt"))
+        }
+    }
 }

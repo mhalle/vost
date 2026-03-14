@@ -16,6 +16,7 @@ from vost import ExcludeFilter, BlobOid, StatResult, disk_glob
     options:
       members:
         - open
+        - fs
         - branches
         - tags
         - notes

@@ -190,7 +190,7 @@ Fs::copy_in(const std::filesystem::path& src,
     }
 
     std::string msg = paths::format_message("copy_in", opts.message);
-    auto new_fs = commit_changes(writes, {}, msg, std::move(report));
+    auto new_fs = commit_changes(writes, {}, msg, std::move(report), opts.parents);
     return {new_fs.changes().value_or(ChangeReport{}), new_fs};
 }
 
@@ -400,7 +400,7 @@ Fs::sync_in(const std::filesystem::path& src,
     }
 
     std::string msg = paths::format_message("sync_in", opts.message);
-    auto new_fs = commit_changes(writes, removes, msg, std::move(report));
+    auto new_fs = commit_changes(writes, removes, msg, std::move(report), opts.parents);
     return {new_fs.changes().value_or(ChangeReport{}), new_fs};
 }
 
@@ -634,7 +634,7 @@ Fs Fs::copy_from_ref(const Fs& source,
     }
 
     std::string msg = paths::format_message("copy_from_ref", opts.message);
-    return commit_changes(writes, removes, msg);
+    return commit_changes(writes, removes, msg, std::nullopt, opts.parents);
 }
 
 Fs Fs::copy_from_ref(const std::string& source_name,

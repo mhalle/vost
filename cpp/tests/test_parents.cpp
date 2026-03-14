@@ -4,6 +4,7 @@
 #include <git2.h>
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <chrono>
@@ -240,5 +241,193 @@ TEST_CASE("Fs: write with multiple advisory parents", "[parents]") {
     CHECK(parent_hash(path, *result.commit_hash(), 1) == *b1.commit_hash());
     CHECK(parent_hash(path, *result.commit_hash(), 2) == *b2.commit_hash());
 
+    fs::remove_all(path);
+}
+
+// ---------------------------------------------------------------------------
+// remove with parents
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Fs: remove with advisory parents", "[parents]") {
+    auto path  = make_temp_repo();
+    auto store = open_store(path);
+    auto snap  = store.branches().get("main");
+
+    snap = snap.write_text("a.txt", "a");
+    snap = snap.write_text("b.txt", "b");
+
+    auto snap_other = store.branches().set_and_get("other", snap);
+    snap_other = snap_other.write_text("c.txt", "c");
+
+    vost::RemoveOptions ropts;
+    ropts.parents.push_back(*snap_other.commit_hash());
+    auto result = snap.remove({"b.txt"}, ropts);
+
+    CHECK(parent_count(path, *result.commit_hash()) == 2);
+    CHECK(parent_hash(path, *result.commit_hash(), 0) == *snap.commit_hash());
+    CHECK(parent_hash(path, *result.commit_hash(), 1) == *snap_other.commit_hash());
+
+    // Content: b.txt removed, a.txt still present
+    CHECK(result.read_text("a.txt") == "a");
+    CHECK_THROWS(result.read_text("b.txt"));
+
+    fs::remove_all(path);
+}
+
+// ---------------------------------------------------------------------------
+// move with parents
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Fs: move with advisory parents", "[parents]") {
+    auto path  = make_temp_repo();
+    auto store = open_store(path);
+    auto snap  = store.branches().get("main");
+
+    snap = snap.write_text("old.txt", "data");
+
+    auto snap_other = store.branches().set_and_get("other", snap);
+    snap_other = snap_other.write_text("x.txt", "x");
+
+    vost::MoveOptions mopts;
+    mopts.parents.push_back(*snap_other.commit_hash());
+    auto result = snap.move({"old.txt"}, "new.txt", mopts);
+
+    CHECK(parent_count(path, *result.commit_hash()) == 2);
+    CHECK(parent_hash(path, *result.commit_hash(), 0) == *snap.commit_hash());
+    CHECK(parent_hash(path, *result.commit_hash(), 1) == *snap_other.commit_hash());
+
+    CHECK(result.read_text("new.txt") == "data");
+    CHECK_THROWS(result.read_text("old.txt"));
+
+    fs::remove_all(path);
+}
+
+// ---------------------------------------------------------------------------
+// rename with parents
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Fs: rename with advisory parents", "[parents]") {
+    auto path  = make_temp_repo();
+    auto store = open_store(path);
+    auto snap  = store.branches().get("main");
+
+    snap = snap.write_text("src.txt", "content");
+
+    auto snap_other = store.branches().set_and_get("other", snap);
+    snap_other = snap_other.write_text("y.txt", "y");
+
+    vost::WriteOptions wopts;
+    wopts.parents.push_back(*snap_other.commit_hash());
+    auto result = snap.rename("src.txt", "dst.txt", wopts);
+
+    CHECK(parent_count(path, *result.commit_hash()) == 2);
+    CHECK(parent_hash(path, *result.commit_hash(), 0) == *snap.commit_hash());
+    CHECK(parent_hash(path, *result.commit_hash(), 1) == *snap_other.commit_hash());
+
+    CHECK(result.read_text("dst.txt") == "content");
+    CHECK_THROWS(result.read_text("src.txt"));
+
+    fs::remove_all(path);
+}
+
+// ---------------------------------------------------------------------------
+// copy_from_ref with parents
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Fs: copy_from_ref with advisory parents", "[parents]") {
+    auto path  = make_temp_repo();
+    auto store = open_store(path);
+    auto snap  = store.branches().get("main");
+
+    snap = snap.write_text("a.txt", "a");
+
+    auto src_branch = store.branches().set_and_get("source", snap);
+    src_branch = src_branch.write_text("imported.txt", "imported");
+
+    auto extra = store.branches().set_and_get("extra", snap);
+    extra = extra.write_text("e.txt", "e");
+
+    vost::CopyFromRefOptions cfopts;
+    cfopts.parents.push_back(*extra.commit_hash());
+    auto result = snap.copy_from_ref("source", {"imported.txt"}, "", cfopts);
+
+    CHECK(parent_count(path, *result.commit_hash()) == 2);
+    CHECK(parent_hash(path, *result.commit_hash(), 0) == *snap.commit_hash());
+    CHECK(parent_hash(path, *result.commit_hash(), 1) == *extra.commit_hash());
+
+    CHECK(result.read_text("imported.txt") == "imported");
+
+    fs::remove_all(path);
+}
+
+// ---------------------------------------------------------------------------
+// copy_in with parents
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Fs: copy_in with advisory parents", "[parents]") {
+    auto path  = make_temp_repo();
+    auto store = open_store(path);
+    auto snap  = store.branches().get("main");
+
+    snap = snap.write_text("a.txt", "a");
+
+    auto snap_other = store.branches().set_and_get("other", snap);
+    snap_other = snap_other.write_text("o.txt", "o");
+
+    // Create a temp dir with a file to copy in
+    auto tmp_dir = fs::temp_directory_path() / "vost_ci_parents_test";
+    fs::create_directories(tmp_dir);
+    {
+        std::ofstream f(tmp_dir / "disk.txt");
+        f << "from-disk";
+    }
+
+    vost::CopyInOptions ciopts;
+    ciopts.parents.push_back(*snap_other.commit_hash());
+    auto [report, result] = snap.copy_in(tmp_dir, "", ciopts);
+
+    CHECK(parent_count(path, *result.commit_hash()) == 2);
+    CHECK(parent_hash(path, *result.commit_hash(), 0) == *snap.commit_hash());
+    CHECK(parent_hash(path, *result.commit_hash(), 1) == *snap_other.commit_hash());
+
+    CHECK(result.read_text("disk.txt") == "from-disk");
+
+    fs::remove_all(tmp_dir);
+    fs::remove_all(path);
+}
+
+// ---------------------------------------------------------------------------
+// sync_in with parents
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Fs: sync_in with advisory parents", "[parents]") {
+    auto path  = make_temp_repo();
+    auto store = open_store(path);
+    auto snap  = store.branches().get("main");
+
+    snap = snap.write_text("a.txt", "a");
+
+    auto snap_other = store.branches().set_and_get("other", snap);
+    snap_other = snap_other.write_text("o.txt", "o");
+
+    // Create a temp dir with content to sync in
+    auto tmp_dir = fs::temp_directory_path() / "vost_si_parents_test";
+    fs::create_directories(tmp_dir / "sub");
+    {
+        std::ofstream f(tmp_dir / "sub" / "synced.txt");
+        f << "synced";
+    }
+
+    vost::SyncOptions sopts;
+    sopts.parents.push_back(*snap_other.commit_hash());
+    auto [report, result] = snap.sync_in(tmp_dir / "sub", "sub", sopts);
+
+    CHECK(parent_count(path, *result.commit_hash()) == 2);
+    CHECK(parent_hash(path, *result.commit_hash(), 0) == *snap.commit_hash());
+    CHECK(parent_hash(path, *result.commit_hash(), 1) == *snap_other.commit_hash());
+
+    CHECK(result.read_text("sub/synced.txt") == "synced");
+
+    fs::remove_all(tmp_dir);
     fs::remove_all(path);
 }

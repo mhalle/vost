@@ -163,6 +163,7 @@ vost cp --ref v1.0 :data ./local          # from tag/branch/hash
 | `--exclude-from FILE` | Read exclude patterns from file (disk→repo only; see [Exclude patterns](#exclude-patterns)). |
 | `--ignore-errors` | Skip failed files and continue. |
 | `-c`, `--checksum` | Compare files by checksum instead of mtime (slower, exact). |
+| `--parent REF` | Additional parent ref (branch/tag/hash). Repeatable. Advisory only — no tree merging (disk→repo only). |
 | `--no-create` | Don't auto-create the repo. |
 | `--tag` | Create a tag at the resulting commit (disk→repo only). |
 | `--force-tag` | Overwrite tag if it already exists. |
@@ -214,6 +215,7 @@ vost sync :data ./local --ref v1.0        # from tag
 | `--gitignore` | Read `.gitignore` files from source tree (disk→repo only). |
 | `--ignore-errors` | Skip failed files. |
 | `-c`, `--checksum` | Compare files by checksum instead of mtime (slower, exact). |
+| `--parent REF` | Additional parent ref (branch/tag/hash). Repeatable. Advisory only — no tree merging (disk→repo only). |
 | `--no-create` | Don't auto-create the repo. |
 | `--tag` | Create a tag at the resulting commit (disk→repo only). |
 | `--force-tag` | Overwrite tag if it already exists. |
@@ -330,6 +332,7 @@ vost rm :a.txt :b.txt               # multiple
 | `--no-glob` | Treat source paths as literal (no `*` or `?` expansion). |
 | `-b`, `--branch` | Branch (default: current branch). |
 | `-m`, `--message` | Commit message. |
+| `--parent REF` | Additional parent ref (branch/tag/hash). Repeatable. Advisory only — no tree merging. |
 | `--tag` | Create a tag at the resulting commit. |
 | `--force-tag` | Overwrite tag if it already exists. |
 
@@ -353,6 +356,7 @@ vost mv dev:old.txt dev:new.txt         # explicit branch
 | `--no-glob` | Treat source paths as literal (no `*` or `?` expansion). |
 | `-b`, `--branch` | Branch (default: current branch). |
 | `-m`, `--message` | Commit message. |
+| `--parent REF` | Additional parent ref (branch/tag/hash). Repeatable. Advisory only — no tree merging. |
 | `--tag` | Create a tag at the resulting commit. |
 | `--force-tag` | Overwrite tag if it already exists. |
 
@@ -377,6 +381,7 @@ tail -f /var/log/app.log | vost write log.txt --passthrough
 | `-p`, `--passthrough` | Echo stdin to stdout (tee mode for pipelines). |
 | `-b`, `--branch` | Branch (default: current branch). |
 | `-m`, `--message` | Commit message. |
+| `--parent REF` | Additional parent ref (branch/tag/hash). Repeatable. Advisory only — no tree merging. |
 | `--no-create` | Don't auto-create the repo. |
 | `--tag` | Create a tag at the resulting commit. |
 | `--force-tag` | Overwrite tag if it already exists. |
@@ -847,6 +852,10 @@ The `--gitignore` flag (sync only) automatically reads `.gitignore` files from t
 ### Dry-run commands
 
 Available on: `cp`, `sync`, `rm`, `mv`, `backup`, `restore`.
+
+### Advisory parents
+
+The `--parent REF` option (repeatable) adds extra parent commits without merging trees. The branch tip stays the first parent; advisory parents are appended. This records provenance (e.g. "this commit incorporates data from these sources") visible to `git log --graph`. Available on: `write`, `rm`, `mv`, `cp`, `sync`.
 
 ### Tag-on-commit commands
 

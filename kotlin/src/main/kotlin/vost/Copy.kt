@@ -144,6 +144,7 @@ internal object CopyOps {
         message: String? = null,
         delete: Boolean = false,
         exclude: ExcludeFilter? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         val pairs = resolveDiskToRepo(sources, dest, exclude)
 
@@ -160,7 +161,7 @@ internal object CopyOps {
                 sourceRels.add(rel)
             }
 
-            val batch = fs.batch(message = message, operation = "cp")
+            val batch = fs.batch(message = message, operation = "cp", parents = parents)
 
             // Write new/updated files
             for ((localPath, repoPath) in pairs) {
@@ -184,7 +185,7 @@ internal object CopyOps {
         } else {
             if (pairs.isEmpty()) return fs
 
-            val batch = fs.batch(message = message, operation = "cp")
+            val batch = fs.batch(message = message, operation = "cp", parents = parents)
             for ((localPath, repoPath) in pairs) {
                 val data = File(localPath).readBytes()
                 batch.write(repoPath, data)
@@ -298,9 +299,10 @@ internal object CopyOps {
         repoPath: String,
         message: String? = null,
         exclude: ExcludeFilter? = null,
+        parents: List<Fs> = emptyList(),
     ): Fs {
         val src = if (localPath.endsWith("/")) localPath else "$localPath/"
-        return copyIn(fs, listOf(src), repoPath, message = message, delete = true, exclude = exclude)
+        return copyIn(fs, listOf(src), repoPath, message = message, delete = true, exclude = exclude, parents = parents)
     }
 
     // ── Sync Out ─────────────────────────────────────────────────────

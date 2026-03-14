@@ -211,3 +211,48 @@ fn write_with_multiple_extra_parents() {
     assert_eq!(parents[1], fs2.commit_hash().unwrap());
     assert_eq!(parents[2], fs3.commit_hash().unwrap());
 }
+
+// ---------------------------------------------------------------------------
+// remove with parents
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_with_parents_adds_extra_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs_main = store.branches().get("main").unwrap();
+
+    // Write a file so we have something to remove.
+    let fs_main = fs_main
+        .write("to_delete.txt", b"gone", Default::default())
+        .unwrap();
+
+    // Create a second branch with its own commit.
+    store.branches().set("other", &fs_main).unwrap();
+    let fs_other = store.branches().get("other").unwrap();
+    let fs_other = fs_other
+        .write("other.txt", b"other", Default::default())
+        .unwrap();
+
+    // Remove with other's tip as extra parent.
+    let new_fs = fs_main
+        .remove(
+            &["to_delete.txt"],
+            fs::RemoveOptions {
+                parents: vec![fs_other.clone()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // File should be gone.
+    assert!(new_fs.read("to_delete.txt").is_err());
+
+    // Commit should have two parents.
+    let hash = new_fs.commit_hash().unwrap();
+    assert_eq!(parent_count(&store, &hash), 2);
+
+    let parents = parent_hashes(&store, &hash);
+    assert_eq!(parents[0], fs_main.commit_hash().unwrap());
+    assert_eq!(parents[1], fs_other.commit_hash().unwrap());
+}

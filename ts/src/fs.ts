@@ -1000,6 +1000,7 @@ export class FS {
       ignoreErrors?: boolean;
       checksum?: boolean;
       exclude?: import('./exclude.js').ExcludeFilter;
+      parents?: FS[];
     } = {},
   ): Promise<FS> {
     const { copyIn } = await import('./copy.js');
@@ -1059,6 +1060,7 @@ export class FS {
       ignoreErrors?: boolean;
       checksum?: boolean;
       exclude?: import('./exclude.js').ExcludeFilter;
+      parents?: FS[];
     } = {},
   ): Promise<FS> {
     const { syncIn } = await import('./copy.js');
@@ -1105,7 +1107,7 @@ export class FS {
    */
   async remove(
     sources: string | string[],
-    opts: { recursive?: boolean; dryRun?: boolean; message?: string } = {},
+    opts: { recursive?: boolean; dryRun?: boolean; message?: string; parents?: FS[] } = {},
   ): Promise<FS> {
     const { remove } = await import('./copy.js');
     return remove(this, sources, opts);
@@ -1128,7 +1130,7 @@ export class FS {
   async move(
     sources: string | string[],
     dest: string,
-    opts: { recursive?: boolean; dryRun?: boolean; message?: string } = {},
+    opts: { recursive?: boolean; dryRun?: boolean; message?: string; parents?: FS[] } = {},
   ): Promise<FS> {
     const { move } = await import('./copy.js');
     return move(this, sources, dest, opts);
@@ -1162,7 +1164,7 @@ export class FS {
     source: FS | string,
     sources?: string | string[],
     dest?: string,
-    opts?: { delete?: boolean; dryRun?: boolean; message?: string },
+    opts?: { delete?: boolean; dryRun?: boolean; message?: string; parents?: FS[] },
   ): Promise<FS> {
     if (!this._writable) throw this._readonlyError('write to');
 
@@ -1289,7 +1291,7 @@ export class FS {
       return this;
     }
 
-    return this._commitChanges(writes, removes, opts?.message, 'cp');
+    return this._commitChanges(writes, removes, opts?.message, 'cp', opts?.parents);
   }
 
   // ---------------------------------------------------------------------------

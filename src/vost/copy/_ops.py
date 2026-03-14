@@ -107,6 +107,7 @@ def _apply_plan(
     follow_symlinks: bool = False,
     mode: FileType | int | None = None,
     ignore_errors: bool = False,
+    parents: list[FS] | None = None,
 ) -> FS:
     """Execute a batch of writes and deletes, attach *changes* to the result.
 
@@ -118,7 +119,7 @@ def _apply_plan(
         fs._changes = _finalize_changes(changes)
         return fs
 
-    with fs.batch(message=message, operation=operation) as b:
+    with fs.batch(message=message, operation=operation, parents=parents) as b:
         if write_pairs:
             _write_files_to_repo(b, write_pairs, follow_symlinks=follow_symlinks,
                                  mode=mode, ignore_errors=ignore_errors,
@@ -158,6 +159,7 @@ def _copy_in(
     checksum: bool = True,
     exclude: ExcludeFilter | None = None,
     operation: str = "cp",
+    parents: list[FS] | None = None,
 ) -> FS:
     """Copy local files/dirs/globs into the repo. Returns ``FS``.
 
@@ -280,7 +282,7 @@ def _copy_in(
         return _apply_plan(fs, write_pairs, delete_full, changes,
                            message=message, operation=operation,
                            follow_symlinks=follow_symlinks, mode=mode,
-                           ignore_errors=ignore_errors)
+                           ignore_errors=ignore_errors, parents=parents)
     else:
         # Non-delete mode: classify written pairs as add vs update
         if ignore_existing:
@@ -315,7 +317,7 @@ def _copy_in(
         return _apply_plan(fs, pairs, [], changes,
                            message=message, operation=operation,
                            follow_symlinks=follow_symlinks, mode=mode,
-                           ignore_errors=ignore_errors)
+                           ignore_errors=ignore_errors, parents=parents)
 
 
 def _copy_in_dry(
@@ -803,6 +805,7 @@ def _remove(
     dry_run: bool = False,
     recursive: bool = False,
     message: str | None = None,
+    parents: list[FS] | None = None,
 ) -> FS:
     """Remove files matching *sources* from the repo. Returns ``FS``.
 
@@ -827,7 +830,7 @@ def _remove(
         return fs
 
     return _apply_plan(fs, [], delete_paths, changes,
-                       message=message, operation="rm")
+                       message=message, operation="rm", parents=parents)
 
 
 # ---------------------------------------------------------------------------
@@ -846,6 +849,7 @@ def _sync_in(
     ignore_errors: bool = False,
     checksum: bool = True,
     exclude: ExcludeFilter | None = None,
+    parents: list[FS] | None = None,
 ) -> FS:
     """Make *repo_path* identical to *local_path*. Returns ``FS``.
 
@@ -879,10 +883,11 @@ def _sync_in(
             fs, [_ensure_trailing_slash(local_path)], repo_path,
             message=message, delete=True, ignore_errors=ignore_errors,
             checksum=checksum, exclude=exclude, operation="sync",
+            parents=parents,
         )
     except (FileNotFoundError, NotADirectoryError):
         # Nonexistent local path → treat as empty source (delete everything)
-        new_fs, delete_rels, is_file = _sync_delete_all_in_repo(fs, repo_path, message=message)
+        new_fs, delete_rels, is_file = _sync_delete_all_in_repo(fs, repo_path, message=message, parents=parents)
         if not delete_rels:
             new_fs._changes = None
             return new_fs
@@ -896,6 +901,7 @@ def _sync_in(
 
 def _sync_delete_all_in_repo(
     fs: FS, repo_path: str, *, message: str | None = None,
+    parents: list[FS] | None = None,
 ) -> tuple[FS, list[str], bool]:
     """Delete all files under *repo_path* (used when sync source is empty).
 
@@ -908,11 +914,11 @@ def _sync_delete_all_in_repo(
     if not repo_files:
         # _walk_repo returns {} for files (not dirs) — check if dest is a file
         if dest and fs.exists(dest) and not fs.is_dir(dest):
-            with fs.batch(message=message, operation="sync") as b:
+            with fs.batch(message=message, operation="sync", parents=parents) as b:
                 b.remove(dest)
             return b.fs, [dest], True
         return fs, [], False
-    with fs.batch(message=message) as b:
+    with fs.batch(message=message, parents=parents) as b:
         for rel in sorted(repo_files):
             full = f"{dest}/{rel}" if dest else rel
             b.remove(full)
@@ -1046,6 +1052,7 @@ def _move(
     dry_run: bool = False,
     recursive: bool = False,
     message: str | None = None,
+    parents: list[FS] | None = None,
 ) -> FS:
     """Move/rename files within the repo. Returns ``FS``.
 
@@ -1068,7 +1075,7 @@ def _move(
         return fs
 
     # Execute: write dest files from source blob data, then remove sources
-    with fs.batch(message=message, operation="mv") as b:
+    with fs.batch(message=message, operation="mv", parents=parents) as b:
         for src, dst in pairs:
             _copy_blob_to_batch(b, fs, src, dst)
         for path in delete_paths:
