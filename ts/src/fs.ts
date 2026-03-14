@@ -1543,6 +1543,47 @@ export class FS {
       current = await current.getParent();
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Squash
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create a new commit with this snapshot's tree but a fresh history.
+   *
+   * The returned FS is detached (not bound to any ref). To persist it,
+   * assign it to a branch via `store.branches.set()`.
+   *
+   * @param opts - Optional squash options.
+   * @param opts.parent - If provided, the squashed commit's parent will be this FS's commit.
+   * @param opts.message - Commit message (default `"squash"`).
+   * @returns A new detached FS with the squashed commit.
+   */
+  async squash(opts?: { parent?: FS; message?: string }): Promise<FS> {
+    const msg = opts?.message ?? 'squash';
+    const parents: string[] = [];
+    if (opts?.parent) {
+      if (!opts.parent._commitOid) throw new Error('parent has no commit');
+      parents.push(opts.parent._commitOid);
+    }
+
+    const sig = this._store._signature;
+    const now = Math.floor(Date.now() / 1000);
+
+    const newOid = await git.writeCommit({
+      fs: this._fsModule,
+      gitdir: this._gitdir,
+      commit: {
+        message: msg.endsWith('\n') ? msg : msg + '\n',
+        tree: this._treeOid,
+        parent: parents,
+        author: { name: sig.name, email: sig.email, timestamp: now, timezoneOffset: 0 },
+        committer: { name: sig.name, email: sig.email, timestamp: now, timezoneOffset: 0 },
+      },
+    });
+
+    return FS._fromCommit(this._store, newOid, null, false);
+  }
 }
 
 // ---------------------------------------------------------------------------

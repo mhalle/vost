@@ -43,9 +43,11 @@ def branch_list(ctx):
               help="Overwrite if branch already exists.")
 @click.option("--empty", is_flag=True, default=False,
               help="Create an empty root branch (no parent commit).")
+@click.option("--squash", is_flag=True, default=False,
+              help="Squash to a single commit (no history).")
 @_snapshot_options
 @click.pass_context
-def branch_set(ctx, name, branch, force, empty, ref, at_path, match_pattern, before, back):
+def branch_set(ctx, name, branch, force, empty, squash, ref, at_path, match_pattern, before, back):
     """Create or update branch NAME.
 
     By default forks from the current branch. Use --empty for a new root branch.
@@ -71,8 +73,13 @@ def branch_set(ctx, name, branch, force, empty, ref, at_path, match_pattern, bef
         branch = branch or _current_branch(store)
         source_fs = _resolve_fs(store, branch, ref=ref, at_path=at_path,
                                 match_pattern=match_pattern, before=before, back=back)
-        from ..fs import FS
-        new_fs = FS(store, source_fs._commit_oid, ref_name=name)
+        if squash:
+            squashed = source_fs.squash()
+            from ..fs import FS
+            new_fs = FS(store, squashed._commit_oid, ref_name=name)
+        else:
+            from ..fs import FS
+            new_fs = FS(store, source_fs._commit_oid, ref_name=name)
         try:
             store.branches[name] = new_fs
         except ValueError as e:

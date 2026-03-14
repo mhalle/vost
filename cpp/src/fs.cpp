@@ -1039,6 +1039,33 @@ std::vector<CommitInfo> Fs::log(LogOptions opts) const {
 }
 
 // ---------------------------------------------------------------------------
+// Squash
+// ---------------------------------------------------------------------------
+
+Fs Fs::squash(std::optional<Fs> parent_fs, const std::string& message) const {
+    const auto& tree_hex = require_tree();
+
+    std::vector<std::string> parent_oids;
+    if (parent_fs) {
+        auto ch = parent_fs->commit_hash();
+        if (!ch)
+            throw NotFoundError("parent snapshot has no commit");
+        parent_oids.push_back(*ch);
+    }
+
+    std::string new_commit_hex;
+    {
+        std::lock_guard<std::mutex> lk(inner_->mutex);
+        new_commit_hex = tree::write_commit(inner_->repo, tree_hex,
+                                             parent_oids,
+                                             inner_->signature,
+                                             message);
+    }
+
+    return Fs(inner_, new_commit_hex, tree_hex, std::nullopt, false);
+}
+
+// ---------------------------------------------------------------------------
 // FsWriter
 // ---------------------------------------------------------------------------
 

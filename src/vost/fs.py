@@ -1274,6 +1274,36 @@ class FS:
             return None
         return FS(self._store, commit.parents[0], ref_name=self._ref_name, writable=self._writable)
 
+    def squash(self, *, parent: FS | None = None, message: str | None = None) -> FS:
+        """Create a new commit with this snapshot's tree but collapsed history.
+
+        Args:
+            parent: Optional parent FS. If provided, the squashed commit's
+                parent is this FS's commit. If None, creates a root commit.
+            message: Commit message (default: ``"squash"``).
+
+        Returns:
+            A detached (read-only) FS pointing at the new commit.
+        """
+        repo = self._store._repo
+        sig = self._store._signature
+
+        if message is None:
+            message = "squash"
+
+        parents = []
+        if parent is not None:
+            parents = [parent._commit_oid]
+
+        new_commit_oid = repo.create_commit(
+            None,  # don't update any ref
+            sig, sig,
+            message,
+            self._tree_oid,
+            parents,
+        )
+        return FS(self._store, new_commit_oid, writable=False)
+
     def back(self, n: int = 1) -> FS:
         """Return the FS at the *n*-th ancestor commit.
 

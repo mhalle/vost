@@ -288,6 +288,13 @@ public:
     /// @throws NotFoundError if no redo history is found.
     Fs redo(size_t n = 1) const;
 
+    // -- Squash -------------------------------------------------------------
+
+    /// Create a new commit with this snapshot's tree but no history.
+    /// Returns a detached (read-only) Fs.
+    Fs squash(std::optional<Fs> parent = std::nullopt,
+              const std::string& message = "squash") const;
+
     // -- Internal -----------------------------------------------------------
 
     /// Access the shared store inner (used by Batch, RefDict, tree functions).

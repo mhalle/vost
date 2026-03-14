@@ -1217,6 +1217,37 @@ class Fs internal constructor(
         return result
     }
 
+    // ── Squash ────────────────────────────────────────────────────────
+
+    /**
+     * Create a new commit with this snapshot's tree but collapsed history.
+     *
+     * @param parent Optional parent Fs. If provided, the squashed commit's
+     *     parent is this Fs's commit. If null, creates a root commit.
+     * @param message Commit message (default: "squash").
+     * @return A detached (read-only) Fs pointing at the new commit.
+     */
+    fun squash(parent: Fs? = null, message: String = "squash"): Fs {
+        val inserter = store.repo.newObjectInserter()
+        try {
+            val commit = CommitBuilder()
+            commit.setTreeId(treeId)
+            if (parent != null) {
+                commit.setParentId(parent.commitId)
+            }
+            val sig = store.signature
+            commit.setAuthor(PersonIdent(sig.name, sig.email))
+            commit.setCommitter(commit.author)
+            val msg = if (message.endsWith("\n")) message else "$message\n"
+            commit.setMessage(msg)
+            val newId = inserter.insert(commit)
+            inserter.flush()
+            return Fs(store, newId, writable = false)
+        } finally {
+            inserter.close()
+        }
+    }
+
     // ── Internal commit ───────────────────────────────────────────────
 
     /**

@@ -1465,6 +1465,51 @@ impl Fs {
         Ok(results)
     }
 
+    /// Create a new commit with this snapshot's tree but no history.
+    ///
+    /// Returns a detached (read-only) `Fs` pointing at the new commit.
+    ///
+    /// # Arguments
+    /// * `parent` - Optional parent Fs. Creates a root commit if `None`.
+    /// * `message` - Commit message (default: `"squash"`).
+    pub fn squash(&self, parent: Option<&Fs>, message: Option<&str>) -> Result<Fs> {
+        let msg = message.unwrap_or("squash");
+        let tree_oid = self
+            .tree_oid
+            .ok_or_else(|| Error::git_msg("no tree"))?;
+
+        let new_oid = {
+            let repo = self
+                .inner
+                .repo
+                .lock()
+                .map_err(|e| Error::git_msg(e.to_string()))?;
+
+            let tree = repo.find_tree(tree_oid).map_err(Error::git)?;
+            let sig = git2::Signature::now(
+                &self.inner.signature.name,
+                &self.inner.signature.email,
+            )
+            .map_err(Error::git)?;
+
+            let parent_commit = match parent {
+                Some(p) => {
+                    let oid = p
+                        .commit_oid
+                        .ok_or_else(|| Error::git_msg("parent has no commit"))?;
+                    Some(repo.find_commit(oid).map_err(Error::git)?)
+                }
+                None => None,
+            };
+            let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
+
+            repo.commit(None, &sig, &sig, msg, &tree, &parents)
+                .map_err(Error::git)?
+        };
+
+        Fs::from_commit(Arc::clone(&self.inner), new_oid, None, Some(false))
+    }
+
     // -- Internal -----------------------------------------------------------
 
     /// Build an `Fs` from a known commit oid.

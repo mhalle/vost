@@ -216,6 +216,118 @@ fn write_with_multiple_extra_parents() {
 // remove with parents
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// squash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn squash_creates_root_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs = store.branches().get("main").unwrap();
+    let fs = fs
+        .write("hello.txt", b"hello", Default::default())
+        .unwrap();
+
+    let squashed = fs.squash(None, None).unwrap();
+
+    // Root commit has zero parents.
+    let hash = squashed.commit_hash().unwrap();
+    assert_eq!(parent_count(&store, &hash), 0);
+
+    // Tree is preserved.
+    assert_eq!(squashed.tree_hash(), fs.tree_hash());
+
+    // Content is readable.
+    assert_eq!(squashed.read("hello.txt").unwrap(), b"hello");
+
+    // Detached / read-only.
+    assert!(!squashed.writable());
+    assert!(squashed.ref_name().is_none());
+}
+
+#[test]
+fn squash_preserves_tree_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs = store.branches().get("main").unwrap();
+    let fs = fs
+        .write("a.txt", b"aaa", Default::default())
+        .unwrap();
+    let fs = fs
+        .write("b.txt", b"bbb", Default::default())
+        .unwrap();
+
+    let squashed = fs.squash(None, None).unwrap();
+    assert_eq!(squashed.tree_hash(), fs.tree_hash());
+
+    // Different commit hash (new commit object).
+    assert_ne!(squashed.commit_hash(), fs.commit_hash());
+}
+
+#[test]
+fn squash_with_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs = store.branches().get("main").unwrap();
+    let fs = fs
+        .write("hello.txt", b"hello", Default::default())
+        .unwrap();
+
+    // Create a parent commit via squash(None).
+    let parent = fs.squash(None, None).unwrap();
+    // Now squash again with that as parent.
+    let child = fs.squash(Some(&parent), None).unwrap();
+
+    let hash = child.commit_hash().unwrap();
+    assert_eq!(parent_count(&store, &hash), 1);
+
+    let parents = parent_hashes(&store, &hash);
+    assert_eq!(parents[0], parent.commit_hash().unwrap());
+}
+
+#[test]
+fn squash_with_custom_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs = store.branches().get("main").unwrap();
+    let fs = fs
+        .write("hello.txt", b"hello", Default::default())
+        .unwrap();
+
+    let squashed = fs.squash(None, Some("custom squash message")).unwrap();
+    let hash = squashed.commit_hash().unwrap();
+
+    // Verify the message via git2.
+    let repo = git2::Repository::open_bare(store.path()).unwrap();
+    let oid = git2::Oid::from_str(&hash).unwrap();
+    let commit = repo.find_commit(oid).unwrap();
+    assert_eq!(commit.message().unwrap(), "custom squash message");
+}
+
+#[test]
+fn squash_assign_to_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs = store.branches().get("main").unwrap();
+    let fs = fs
+        .write("hello.txt", b"hello", Default::default())
+        .unwrap();
+
+    let squashed = fs.squash(None, None).unwrap();
+
+    // Assign to a new branch.
+    store.branches().set("squashed", &squashed).unwrap();
+    let branch_fs = store.branches().get("squashed").unwrap();
+    assert_eq!(branch_fs.tree_hash(), fs.tree_hash());
+    assert_eq!(branch_fs.read("hello.txt").unwrap(), b"hello");
+    assert_eq!(parent_count(&store, &branch_fs.commit_hash().unwrap()), 0);
+}
+
+// ---------------------------------------------------------------------------
+// remove with parents
+// ---------------------------------------------------------------------------
+
 #[test]
 fn remove_with_parents_adds_extra_parent() {
     let dir = tempfile::tempdir().unwrap();
