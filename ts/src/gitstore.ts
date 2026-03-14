@@ -182,6 +182,7 @@ export class GitStore {
       onAuth?: Function;
       refs?: RefSpec;
       format?: string;
+      squash?: boolean;
     } = {},
   ): Promise<MirrorDiff> {
     const { backup } = await import('./mirror.js');
@@ -232,10 +233,10 @@ export class GitStore {
    */
   async bundleExport(
     path: string,
-    opts: { refs?: RefSpec } = {},
+    opts: { refs?: RefSpec; squash?: boolean } = {},
   ): Promise<void> {
     const { bundleExport } = await import('./mirror.js');
-    return bundleExport(this, path, opts.refs);
+    return bundleExport(this, path, opts.refs, opts.squash);
   }
 
   /**

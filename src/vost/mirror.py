@@ -7,6 +7,7 @@ all remote refs to local (restore).  Extracted from repo.py and cli.py.
 from __future__ import annotations
 
 import os
+import time as _time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -347,8 +348,35 @@ def _additive_fetch(drepo: _DRepo, url: str, *, refs=None, ref_map=None,
 # Bundle helpers
 # ---------------------------------------------------------------------------
 
-def bundle_export(store: GitStore, path: str, *, refs=None, progress=None):
-    """Create a bundle file from local refs."""
+def _create_squashed_commit(drepo, tree_oid, signature):
+    """Create a parentless commit with the given tree.
+
+    The commit is written to the object store but no ref is created.
+    Returns the commit OID (bytes, 40-char hex).
+    """
+    from dulwich.objects import Commit as _DCommit
+
+    c = _DCommit()
+    c.tree = tree_oid
+    c.parents = []
+    c.author = c.committer = signature._identity
+    now = int(_time.time())
+    c.author_time = c.commit_time = now
+    c.author_timezone = c.commit_timezone = 0
+    c.message = b"squash\n"
+    c.encoding = b"UTF-8"
+    drepo.object_store.add_object(c)
+    return c.id
+
+
+def bundle_export(store: GitStore, path: str, *, refs=None, squash: bool = False,
+                  progress=None):
+    """Create a bundle file from local refs.
+
+    When *squash* is ``True`` each ref in the bundle gets a parentless
+    commit whose tree matches the original tip, effectively stripping
+    all history from the bundle.
+    """
     from dulwich.bundle import create_bundle_from_repo, write_bundle
 
     drepo = store._repo._drepo
@@ -362,16 +390,59 @@ def bundle_export(store: GitStore, path: str, *, refs=None, progress=None):
         ref_map = None
         bundle_refs = sorted(all_local)
 
-    bundle = create_bundle_from_repo(drepo, refs=bundle_refs, progress=progress)
-    # Rename refs in the bundle header if a mapping is provided
-    if ref_map is not None:
-        bundle.references = {
-            ref_map.get(r, r): sha
-            for r, sha in bundle.references.items()
-        }
-    with open(path, "wb") as f:
-        write_bundle(f, bundle)
-    bundle.close()
+    # ------------------------------------------------------------------
+    # Squash: replace each ref's commit with a parentless commit
+    # sharing the same tree.  We create temporary refs so that
+    # create_bundle_from_repo can look them up normally.
+    # ------------------------------------------------------------------
+    tmp_refs: list[bytes] = []
+    if squash:
+        squashed_bundle_refs = []
+        for ref in bundle_refs:
+            sha = drepo.refs[ref]
+            obj = drepo.object_store[sha]
+            # Peel tags to commit
+            from dulwich.objects import Tag as _DTag
+            while isinstance(obj, _DTag):
+                obj = drepo.object_store[obj.object[1]]
+            tree_oid = obj.tree
+            sq_oid = _create_squashed_commit(drepo, tree_oid, store._signature)
+            # Create a temporary ref
+            tmp_name = b"refs/vost-squash-tmp/" + ref.split(b"/", 2)[-1]
+            drepo.refs[tmp_name] = sq_oid
+            tmp_refs.append(tmp_name)
+            squashed_bundle_refs.append(tmp_name)
+        actual_refs = squashed_bundle_refs
+    else:
+        actual_refs = bundle_refs
+
+    try:
+        bundle = create_bundle_from_repo(drepo, refs=actual_refs, progress=progress)
+
+        if squash:
+            # Remap temp ref names back to the real names (or renamed names)
+            new_references = {}
+            for tmp_name, orig_name in zip(tmp_refs, bundle_refs):
+                dest_name = ref_map.get(orig_name, orig_name) if ref_map else orig_name
+                new_references[dest_name] = bundle.references[tmp_name]
+            bundle.references = new_references
+        elif ref_map is not None:
+            # Rename refs in the bundle header if a mapping is provided
+            bundle.references = {
+                ref_map.get(r, r): sha
+                for r, sha in bundle.references.items()
+            }
+
+        with open(path, "wb") as f:
+            write_bundle(f, bundle)
+        bundle.close()
+    finally:
+        # Clean up temporary refs
+        for tmp_name in tmp_refs:
+            try:
+                del drepo.refs[tmp_name]
+            except (KeyError, Exception):
+                pass
 
 
 def bundle_import(store: GitStore, path: str, *, refs=None, progress=None):
@@ -500,6 +571,7 @@ def backup(
     progress=None,
     refs: list[str] | dict[str, str] | None = None,
     format: str | None = None,
+    squash: bool = False,
 ) -> MirrorDiff:
     """Push refs to *url* (or write a bundle file).
 
@@ -509,16 +581,23 @@ def backup(
     *refs* may be a list of names (identity mapping) or a dict mapping
     source names to destination names for renaming on the remote side.
 
+    When *squash* is ``True`` and writing a bundle, each ref gets a
+    parentless commit with the same tree (stripping history).
+    *squash* is only supported for bundle output.
+
     Returns a `MirrorDiff` describing what changed (or would change).
     """
     drepo = store._repo._drepo
     use_bundle = (format == "bundle") or _is_bundle_path(url)
 
+    if squash and not use_bundle:
+        raise ValueError("squash is only supported for bundle output")
+
     if use_bundle:
         raw = _diff_bundle_export(store, url, refs=refs)
         diff = _raw_diff_to_sync_diff(raw)
         if not dry_run:
-            bundle_export(store, url, refs=refs, progress=progress)
+            bundle_export(store, url, refs=refs, squash=squash, progress=progress)
         return diff
 
     if refs is not None:

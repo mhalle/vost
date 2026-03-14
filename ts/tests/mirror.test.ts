@@ -514,6 +514,87 @@ describe('Mirror: ref renaming', () => {
     ).toBe('payload');
   });
 
+  it('squash bundle export strips history', async () => {
+    const { store, tmpDir } = await freshStore();
+    cleanups.push(tmpDir);
+    let snap = await store.branches.get('main');
+    snap = await snap.writeText('a.txt', 'v1');
+    snap = await snap.writeText('a.txt', 'v2');
+    snap = await snap.writeText('a.txt', 'v3');
+
+    // Verify source has history
+    let count = 0;
+    for await (const _ of (await store.branches.get('main')).log()) {
+      count++;
+    }
+    expect(count).toBeGreaterThan(1);
+
+    const bundlePath = path.join(tmpDir, 'squashed.bundle');
+    await store.bundleExport(bundlePath, { squash: true });
+
+    const { store: store2, tmpDir: td2 } = await freshStore({ branch: null });
+    cleanups.push(td2);
+    await store2.bundleImport(bundlePath);
+
+    expect(await store2.branches.has('main')).toBe(true);
+    expect(
+      await (await store2.branches.get('main')).readText('a.txt'),
+    ).toBe('v3');
+
+    // Squashed: only one commit (no parent)
+    let logCount = 0;
+    for await (const _ of (await store2.branches.get('main')).log()) {
+      logCount++;
+    }
+    expect(logCount).toBe(1);
+  });
+
+  it('squash preserves tree hash', async () => {
+    const { store, tmpDir } = await freshStore();
+    cleanups.push(tmpDir);
+    let snap = await store.branches.get('main');
+    snap = await snap.writeText('a.txt', 'hello');
+    snap = await snap.writeText('sub/b.txt', 'world');
+    const originalTreeHash = (await store.branches.get('main')).treeHash;
+
+    const bundlePath = path.join(tmpDir, 'squash-tree.bundle');
+    await store.bundleExport(bundlePath, { squash: true });
+
+    const { store: store2, tmpDir: td2 } = await freshStore({ branch: null });
+    cleanups.push(td2);
+    await store2.bundleImport(bundlePath);
+
+    const restoredTreeHash = (await store2.branches.get('main')).treeHash;
+    expect(restoredTreeHash).toBe(originalTreeHash);
+  });
+
+  it('backup with squash', async () => {
+    const { store, tmpDir } = await freshStore();
+    cleanups.push(tmpDir);
+    let snap = await store.branches.get('main');
+    snap = await snap.writeText('a.txt', 'v1');
+    snap = await snap.writeText('a.txt', 'v2');
+
+    const bundlePath = path.join(tmpDir, 'backup-squash.bundle');
+    const diff = await store.backup(bundlePath, { squash: true });
+    expect(diff.add.length).toBeGreaterThan(0);
+
+    const { store: store2, tmpDir: td2 } = await freshStore({ branch: null });
+    cleanups.push(td2);
+    await store2.restore(bundlePath);
+
+    expect(
+      await (await store2.branches.get('main')).readText('a.txt'),
+    ).toBe('v2');
+
+    // Should have only 1 commit
+    let logCount = 0;
+    for await (const _ of (await store2.branches.get('main')).log()) {
+      logCount++;
+    }
+    expect(logCount).toBe(1);
+  });
+
   it('refs array still works (backward compat)', async () => {
     const { store, tmpDir } = await freshStore();
     cleanups.push(tmpDir);

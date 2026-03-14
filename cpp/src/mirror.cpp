@@ -300,7 +300,7 @@ bool is_bundle_path(const std::string& path) {
 
 void bundle_export_impl(git_repository* repo, const std::string& path,
                         const std::vector<std::string>& refs, const RefMap& local_refs,
-                        const RefMap& rename = {}) {
+                        const RefMap& rename = {}, bool squash = false) {
     // Determine which refs to include
     RefMap to_export;
     if (refs.empty()) {
@@ -313,6 +313,53 @@ void bundle_export_impl(git_repository* repo, const std::string& path,
     }
     if (to_export.empty()) {
         throw GitError("bundle_export: no refs to export");
+    }
+
+    // When squash is true, create parentless commits with the same tree
+    // for each ref, and use those OIDs instead of the originals.
+    RefMap effective_export;
+    if (squash) {
+        git_signature* sig = nullptr;
+        if (git_signature_now(&sig, "vost", "vost@localhost") != 0)
+            throw_git("git_signature_now");
+
+        for (const auto& [name, sha] : to_export) {
+            git_oid orig_oid;
+            if (git_oid_fromstr(&orig_oid, sha.c_str()) != 0) {
+                git_signature_free(sig);
+                throw_git("git_oid_fromstr");
+            }
+            git_commit* commit = nullptr;
+            if (git_commit_lookup(&commit, repo, &orig_oid) != 0) {
+                git_signature_free(sig);
+                throw_git("git_commit_lookup");
+            }
+            git_tree* tree = nullptr;
+            if (git_commit_tree(&tree, commit) != 0) {
+                git_commit_free(commit);
+                git_signature_free(sig);
+                throw_git("git_commit_tree");
+            }
+            git_oid squashed_oid;
+            if (git_commit_create(&squashed_oid, repo,
+                                  nullptr, // don't update any ref
+                                  sig, sig,
+                                  nullptr, // encoding
+                                  "squash\n",
+                                  tree,
+                                  0, nullptr) != 0) { // no parents
+                git_tree_free(tree);
+                git_commit_free(commit);
+                git_signature_free(sig);
+                throw_git("git_commit_create (squash)");
+            }
+            git_tree_free(tree);
+            git_commit_free(commit);
+            effective_export[name] = oid_hex(&squashed_oid);
+        }
+        git_signature_free(sig);
+    } else {
+        effective_export = to_export;
     }
 
     // Build packfile containing all commits and their objects.
@@ -328,7 +375,7 @@ void bundle_export_impl(git_repository* repo, const std::string& path,
         throw_git("git_revwalk_new");
     }
 
-    for (const auto& [name, sha] : to_export) {
+    for (const auto& [name, sha] : effective_export) {
         git_oid oid;
         if (git_oid_fromstr(&oid, sha.c_str()) != 0) {
             git_revwalk_free(walk);
@@ -356,9 +403,10 @@ void bundle_export_impl(git_repository* repo, const std::string& path,
     }
     git_packbuilder_free(pb);
 
-    // Build bundle v2 header (use destination names if rename map provided)
+    // Build bundle v2 header (use destination names if rename map provided,
+    // and squashed OIDs if squash is enabled)
     std::string header = "# v2 git bundle\n";
-    for (const auto& [name, sha] : to_export) {
+    for (const auto& [name, sha] : effective_export) {
         auto it = rename.find(name);
         const auto& dest_name = (it != rename.end()) ? it->second : name;
         header += sha + " " + dest_name + "\n";
@@ -704,7 +752,7 @@ MirrorDiff backup(const std::shared_ptr<GitStoreInner>& inner,
         if (use_bundle) {
             auto diff = diff_bundle_export(inner->repo, src_refs, resolved);
             if (!opts.dry_run) {
-                bundle_export_impl(inner->repo, dest, src_refs, local_refs, resolved);
+                bundle_export_impl(inner->repo, dest, src_refs, local_refs, resolved, opts.squash);
             }
             return diff;
         }
@@ -738,7 +786,7 @@ MirrorDiff backup(const std::shared_ptr<GitStoreInner>& inner,
         auto diff = diff_bundle_export(inner->repo, opts.refs);
         if (!opts.dry_run) {
             auto local_refs = get_local_refs(inner->repo);
-            bundle_export_impl(inner->repo, dest, opts.refs, local_refs);
+            bundle_export_impl(inner->repo, dest, opts.refs, local_refs, {}, opts.squash);
         }
         return diff;
     }
@@ -870,7 +918,8 @@ MirrorDiff restore(const std::shared_ptr<GitStoreInner>& inner,
 void bundle_export(const std::shared_ptr<GitStoreInner>& inner,
                    const std::string& path,
                    const std::vector<std::string>& refs,
-                   const std::map<std::string, std::string>& ref_map) {
+                   const std::map<std::string, std::string>& ref_map,
+                   bool squash) {
     std::lock_guard<std::mutex> lk(inner->mutex);
     auto local_refs = get_local_refs(inner->repo);
     if (!ref_map.empty()) {
@@ -881,9 +930,9 @@ void bundle_export(const std::shared_ptr<GitStoreInner>& inner,
         for (const auto& [s, d] : resolved) {
             src_refs.push_back(s);
         }
-        bundle_export_impl(inner->repo, path, src_refs, local_refs, resolved);
+        bundle_export_impl(inner->repo, path, src_refs, local_refs, resolved, squash);
     } else {
-        bundle_export_impl(inner->repo, path, refs, local_refs);
+        bundle_export_impl(inner->repo, path, refs, local_refs, {}, squash);
     }
 }
 

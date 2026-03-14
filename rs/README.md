@@ -427,8 +427,8 @@ println!("added: {}, updated: {}, deleted: {}", diff.add.len(), diff.update.len(
 Create and import bundle files directly:
 
 ```rust
-store.bundle_export("backup.bundle", None)?;                                  // all refs
-store.bundle_export("backup.bundle", Some(&["main".into()]))?;                // specific refs
+store.bundle_export("backup.bundle", None, None, false)?;                      // all refs
+store.bundle_export("backup.bundle", Some(&["main".into()]), None, false)?;   // specific refs
 store.bundle_import("backup.bundle", None)?;                                  // import all (additive)
 store.bundle_import("backup.bundle", Some(&["main".into()]))?;                // specific refs
 ```

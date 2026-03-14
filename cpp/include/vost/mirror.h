@@ -58,7 +58,8 @@ MirrorDiff restore(const std::shared_ptr<GitStoreInner>& inner,
 void bundle_export(const std::shared_ptr<GitStoreInner>& inner,
                    const std::string& path,
                    const std::vector<std::string>& refs = {},
-                   const std::map<std::string, std::string>& ref_map = {});
+                   const std::map<std::string, std::string>& ref_map = {},
+                   bool squash = false);
 
 /// Import refs from a git bundle file.
 ///

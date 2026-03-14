@@ -533,6 +533,7 @@ pub fn bundle_export(
     path: &str,
     refs: Option<&[String]>,
     rename: Option<&HashMap<String, String>>,
+    squash: bool,
 ) -> Result<()> {
     let repo = git2::Repository::open_bare(repo_path).map_err(Error::git)?;
     let local_refs = get_local_refs(repo_path)?;
@@ -552,12 +553,35 @@ pub fn bundle_export(
         return Err(Error::git_msg("no refs to export"));
     }
 
+    // When squash is true, create parentless commits with the same tree
+    // for each ref, and use those OIDs instead of the originals.
+    let effective_export: HashMap<String, String> = if squash {
+        let sig = git2::Signature::now("vost", "vost@localhost").map_err(Error::git)?;
+        let mut squashed = HashMap::new();
+        for (name, sha) in &to_export {
+            let oid = git2::Oid::from_str(sha).map_err(Error::git)?;
+            let commit = repo.find_commit(oid).map_err(Error::git)?;
+            let tree = commit.tree().map_err(Error::git)?;
+            let squashed_oid = repo.commit(
+                None,  // don't update any ref
+                &sig, &sig,
+                "squash\n",
+                &tree,
+                &[],  // no parents
+            ).map_err(Error::git)?;
+            squashed.insert(name.clone(), squashed_oid.to_string());
+        }
+        squashed
+    } else {
+        to_export.clone()
+    };
+
     // Build packfile containing all commits and their objects.
     // Use RevWalk + insert_walk to include full ancestry (insert_commit
     // only adds a single commit and its tree, not parent commits).
     let mut pb = repo.packbuilder().map_err(Error::git)?;
     let mut revwalk = repo.revwalk().map_err(Error::git)?;
-    for sha in to_export.values() {
+    for sha in effective_export.values() {
         let oid = git2::Oid::from_str(sha).map_err(Error::git)?;
         revwalk.push(oid).map_err(Error::git)?;
     }
@@ -566,9 +590,10 @@ pub fn bundle_export(
     let mut buf = git2::Buf::new();
     pb.write_buf(&mut buf).map_err(Error::git)?;
 
-    // Build v2 bundle header (use destination names if rename map provided)
+    // Build v2 bundle header (use destination names if rename map provided,
+    // and squashed OIDs if squash is enabled)
     let mut header = String::from("# v2 git bundle\n");
-    for (name, sha) in &to_export {
+    for (name, sha) in &effective_export {
         let dest_name = rename.and_then(|m| m.get(name)).unwrap_or(name);
         header.push_str(sha);
         header.push(' ');
@@ -767,7 +792,7 @@ pub fn backup(repo_path: &Path, dest: &str, opts: &BackupOptions) -> Result<Mirr
             let src_keys: Vec<String> = resolved.keys().cloned().collect();
             let diff = diff_bundle_export(repo_path, Some(&src_keys), Some(&resolved))?;
             if !opts.dry_run {
-                bundle_export(repo_path, dest, Some(&src_keys), Some(&resolved))?;
+                bundle_export(repo_path, dest, Some(&src_keys), Some(&resolved), opts.squash)?;
             }
             return Ok(diff);
         }
@@ -816,7 +841,7 @@ pub fn backup(repo_path: &Path, dest: &str, opts: &BackupOptions) -> Result<Mirr
     if use_bundle {
         let diff = diff_bundle_export(repo_path, opts.refs.as_deref(), None)?;
         if !opts.dry_run {
-            bundle_export(repo_path, dest, opts.refs.as_deref(), None)?;
+            bundle_export(repo_path, dest, opts.refs.as_deref(), None, opts.squash)?;
         }
         return Ok(diff);
     }

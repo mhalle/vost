@@ -557,6 +557,59 @@ class MirrorTest {
         }
     }
 
+    // ── Squash tests ─────────────────────────────────────────────────────
+
+    @Test
+    fun `squash bundle strips history`(@TempDir tempDir: Path) {
+        val store = createStore()
+        store.use {
+            var fs = it.branches["main"]
+            fs = fs.write("a.txt", "v1".toByteArray())
+            fs = fs.write("a.txt", "v2".toByteArray())
+            fs = fs.write("a.txt", "v3".toByteArray())
+
+            val bundle = tempDir.resolve("squash.bundle").toFile().absolutePath
+            it.backup(bundle, squash = true)
+
+            // Restore into a new store
+            val store2Dir = tempDir.resolve("restored.git").toFile()
+            val store2 = GitStore.open(store2Dir.absolutePath, branch = null)
+            store2.use { s2 ->
+                s2.restore(bundle)
+
+                // Content should be there
+                assertEquals("v3", s2.branches["main"].readText("a.txt"))
+
+                // History should be squashed: only one commit (no parents)
+                val restored = s2.branches["main"]
+                val log = restored.log()
+                assertEquals(1, log.size)
+            }
+        }
+    }
+
+    @Test
+    fun `squash preserves tree hash`(@TempDir tempDir: Path) {
+        val store = createStore()
+        store.use {
+            var fs = it.branches["main"]
+            fs = fs.write("a.txt", "hello".toByteArray())
+            fs = fs.write("dir/b.txt", "world".toByteArray())
+
+            val originalTreeHash = it.branches["main"].treeHash
+
+            val bundle = tempDir.resolve("squash.bundle").toFile().absolutePath
+            it.backup(bundle, squash = true)
+
+            val store2Dir = tempDir.resolve("restored.git").toFile()
+            val store2 = GitStore.open(store2Dir.absolutePath, branch = null)
+            store2.use { s2 ->
+                s2.restore(bundle)
+                assertEquals(originalTreeHash, s2.branches["main"].treeHash)
+            }
+        }
+    }
+
     @Test
     fun `backup bundle with refs`(@TempDir tempDir: Path) {
         val store = createStore()

@@ -92,7 +92,8 @@ class GitStore private constructor(
         refs: List<String>? = null,
         refMap: Map<String, String>? = null,
         format: String? = null,
-    ): MirrorDiff = MirrorOps.backup(this, url, dryRun, refs, refMap, format)
+        squash: Boolean = false,
+    ): MirrorDiff = MirrorOps.backup(this, url, dryRun, refs, refMap, format, squash)
 
     /**
      * Fetch refs from url (or import a bundle file).

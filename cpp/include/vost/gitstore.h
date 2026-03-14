@@ -117,7 +117,8 @@ public:
     ///                 (empty = no renaming).
     void bundle_export(const std::string& path,
                        const std::vector<std::string>& refs = {},
-                       const std::map<std::string, std::string>& ref_map = {});
+                       const std::map<std::string, std::string>& ref_map = {},
+                       bool squash = false);
 
     /// Import refs from a git bundle file.
     ///

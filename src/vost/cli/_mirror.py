@@ -84,8 +84,10 @@ def _progress_cb(ctx):
 @click.option("--ref", multiple=True, help="Ref to include (repeatable). Use src:dst to rename. Omit for all refs.")
 @click.option("--format", "fmt", type=click.Choice(["bundle"]), default=None,
               help="Force output format (auto-detected from .bundle extension).")
+@click.option("--squash", is_flag=True, default=False,
+              help="Strip history: each ref becomes a single parentless commit (bundle only).")
 @click.pass_context
-def backup_cmd(ctx, url, dry_run, ref, fmt):
+def backup_cmd(ctx, url, dry_run, ref, fmt, squash):
     """Push refs to a remote URL or write a bundle file.
 
     Without --ref this is a full mirror: remote-only refs are deleted.
@@ -93,6 +95,7 @@ def backup_cmd(ctx, url, dry_run, ref, fmt):
     Use --ref src:dst to rename refs on the remote side.
 
     If URL ends with .bundle, a portable bundle file is written.
+    Use --squash to strip history from bundle output.
     """
     from ..mirror import _is_bundle_path, resolve_credentials
 
@@ -101,7 +104,7 @@ def backup_cmd(ctx, url, dry_run, ref, fmt):
     use_bundle = (fmt == "bundle") or _is_bundle_path(url)
     auth_url = url if use_bundle else resolve_credentials(url)
     diff = store.backup(auth_url, dry_run=dry_run, progress=_progress_cb(ctx),
-                        refs=refs, format=fmt)
+                        refs=refs, format=fmt, squash=squash)
     if dry_run:
         _print_diff(diff, "push")
     else:

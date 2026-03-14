@@ -689,6 +689,101 @@ TEST_CASE("Mirror: restore bundle with ref_map", "[mirror]") {
     fs::remove_all(restore_path);
 }
 
+// ---------------------------------------------------------------------------
+// squash
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Mirror: squash bundle export strips history", "[mirror]") {
+    auto path = make_temp_mirror_dir();
+    auto store = open_mirror_store(path);
+    auto f = store.branches()["main"];
+    f = f.write_text("a.txt", "v1");
+    f = f.write_text("a.txt", "v2");
+    f = f.write_text("a.txt", "v3");
+
+    // Normal bundle — restored branch should have history (multiple commits)
+    auto bundle_normal = (path.parent_path() / "normal.bundle").string();
+    store.bundle_export(bundle_normal);
+
+    auto restore1 = path.parent_path() / (path.filename().string() + "_r1.git");
+    vost::OpenOptions oo;
+    oo.create = true;
+    auto s1 = vost::GitStore::open(restore1, oo);
+    s1.bundle_import(bundle_normal);
+    auto log1 = s1.branches()["main"].log();
+    CHECK(log1.size() >= 3); // at least 3 commits
+
+    // Squash bundle — restored branch should have exactly 1 commit
+    auto bundle_squash = (path.parent_path() / "squash.bundle").string();
+    store.bundle_export(bundle_squash, {}, {}, true);
+
+    auto restore2 = path.parent_path() / (path.filename().string() + "_r2.git");
+    auto s2 = vost::GitStore::open(restore2, oo);
+    s2.bundle_import(bundle_squash);
+    auto log2 = s2.branches()["main"].log();
+    CHECK(log2.size() == 1);
+    CHECK(s2.branches()["main"].read_text("a.txt") == "v3");
+
+    fs::remove_all(path);
+    fs::remove(bundle_normal);
+    fs::remove(bundle_squash);
+    fs::remove_all(restore1);
+    fs::remove_all(restore2);
+}
+
+TEST_CASE("Mirror: squash preserves tree hash", "[mirror]") {
+    auto path = make_temp_mirror_dir();
+    auto store = open_mirror_store(path);
+    auto f = store.branches()["main"];
+    f = f.write_text("a.txt", "hello");
+    f = f.write_text("b.txt", "world");
+    auto orig_tree = f.tree_hash();
+
+    auto bundle = (path.parent_path() / "squash_tree.bundle").string();
+    store.bundle_export(bundle, {}, {}, true);
+
+    auto restore_path = path.parent_path() / (path.filename().string() + "_restored.git");
+    vost::OpenOptions oo;
+    oo.create = true;
+    auto s2 = vost::GitStore::open(restore_path, oo);
+    s2.bundle_import(bundle);
+    auto restored_tree = s2.branches()["main"].tree_hash();
+
+    CHECK(orig_tree == restored_tree);
+
+    fs::remove_all(path);
+    fs::remove(bundle);
+    fs::remove_all(restore_path);
+}
+
+TEST_CASE("Mirror: backup with squash to bundle", "[mirror]") {
+    auto path = make_temp_mirror_dir();
+    auto store = open_mirror_store(path);
+    auto f = store.branches()["main"];
+    f = f.write_text("a.txt", "v1");
+    f = f.write_text("a.txt", "v2");
+
+    auto bundle = (path.parent_path() / "backup_squash.bundle").string();
+    vost::BackupOptions bo;
+    bo.squash = true;
+    auto diff = store.backup(bundle, bo);
+    CHECK_FALSE(diff.in_sync());
+
+    auto restore_path = path.parent_path() / (path.filename().string() + "_restored.git");
+    vost::OpenOptions oo;
+    oo.create = true;
+    auto s2 = vost::GitStore::open(restore_path, oo);
+    s2.restore(bundle);
+
+    auto log = s2.branches()["main"].log();
+    CHECK(log.size() == 1);
+    CHECK(s2.branches()["main"].read_text("a.txt") == "v2");
+
+    fs::remove_all(path);
+    fs::remove(bundle);
+    fs::remove_all(restore_path);
+}
+
 TEST_CASE("Mirror: ref_map with short names resolves correctly", "[mirror]") {
     auto path = make_temp_mirror_dir();
     auto store = open_mirror_store(path);

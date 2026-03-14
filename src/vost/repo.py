@@ -399,6 +399,7 @@ class GitStore:
         progress: Callable | None = None,
         refs: list[str] | dict[str, str] | None = None,
         format: str | None = None,
+        squash: bool = False,
     ) -> MirrorDiff:
         """Push refs to *url*, or write a bundle file.
 
@@ -410,6 +411,9 @@ class GitStore:
         *refs* may be a list of names (identity mapping) or a dict mapping
         source names to destination names for renaming on the remote side.
 
+        When *squash* is ``True`` and writing a bundle, each ref gets a
+        parentless commit with the same tree (stripping history).
+
         Args:
             url: Remote URL, local path, or ``.bundle`` file path.
             dry_run: Compute diff without pushing.
@@ -417,13 +421,15 @@ class GitStore:
             refs: Ref names to include (short or full), or a dict mapping
                 source to destination names. ``None`` = all refs.
             format: ``"bundle"`` to force bundle format.
+            squash: Strip history — each ref becomes a single parentless
+                commit. Only supported for bundle output.
 
         Returns:
             A :class:`MirrorDiff` describing what changed (or would change).
         """
         from .mirror import backup
         return backup(self, url, dry_run=dry_run, progress=progress,
-                       refs=refs, format=format)
+                       refs=refs, format=format, squash=squash)
 
     def restore(
         self,
@@ -464,6 +470,7 @@ class GitStore:
         path: str,
         *,
         refs: list[str] | dict[str, str] | None = None,
+        squash: bool = False,
         progress: Callable | None = None,
     ) -> None:
         """Export refs to a bundle file.
@@ -471,14 +478,19 @@ class GitStore:
         *refs* may be a list of names (identity mapping) or a dict mapping
         source names to destination names for renaming in the bundle.
 
+        When *squash* is ``True`` each ref in the bundle gets a parentless
+        commit whose tree matches the original tip, stripping all history.
+
         Args:
             path: Destination ``.bundle`` file path.
             refs: Ref names to include (short or full), or a dict mapping
                 source to destination names. ``None`` = all refs.
+            squash: Strip history — each ref becomes a single parentless
+                commit.
             progress: Optional progress callback.
         """
         from .mirror import bundle_export
-        bundle_export(self, path, refs=refs, progress=progress)
+        bundle_export(self, path, refs=refs, squash=squash, progress=progress)
 
     def bundle_import(
         self,

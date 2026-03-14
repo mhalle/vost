@@ -231,13 +231,16 @@ impl GitStore {
     /// * `refs` - Optional list of ref names to include. `None` exports all refs.
     /// * `rename` - Optional map of source→destination ref names for renaming refs
     ///   in the bundle header.
+    /// * `squash` - If true, each ref gets a parentless commit with the same tree,
+    ///   stripping all history.
     pub fn bundle_export(
         &self,
         path: &str,
         refs: Option<&[String]>,
         rename: Option<&std::collections::HashMap<String, String>>,
+        squash: bool,
     ) -> Result<()> {
-        crate::mirror::bundle_export(&self.inner.path, path, refs, rename)
+        crate::mirror::bundle_export(&self.inner.path, path, refs, rename, squash)
     }
 
     /// Import refs from a bundle file (additive — no deletes).

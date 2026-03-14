@@ -1,9 +1,12 @@
 package vost
 
+import org.eclipse.jgit.lib.CommitBuilder
 import org.eclipse.jgit.lib.Constants
 import org.eclipse.jgit.lib.NullProgressMonitor
 import org.eclipse.jgit.lib.ObjectId
+import org.eclipse.jgit.lib.PersonIdent
 import org.eclipse.jgit.lib.Repository
+import org.eclipse.jgit.revwalk.RevWalk
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder
 import org.eclipse.jgit.transport.*
 import java.io.File
@@ -133,6 +136,7 @@ internal object MirrorOps {
         refs: List<String>? = null,
         refMap: Map<String, String>? = null,
         format: String? = null,
+        squash: Boolean = false,
     ): MirrorDiff {
         val repo = store.repo
         val useBundle = format == "bundle" || isBundlePath(url)
@@ -143,13 +147,13 @@ internal object MirrorOps {
                 val resolved = resolveRefMap(refMap, localRefs)
                 val diff = diffBundleExportMapped(repo, resolved)
                 if (!dryRun) {
-                    bundleExportMapped(repo, url, resolved)
+                    bundleExportMapped(repo, url, resolved, squash)
                 }
                 return diff
             }
             val diff = diffBundleExport(repo, refs)
             if (!dryRun) {
-                bundleExport(repo, url, refs)
+                bundleExport(repo, url, refs, squash)
             }
             return diff
         }
@@ -692,7 +696,7 @@ internal object MirrorOps {
     /**
      * Create a bundle file from local refs.
      */
-    private fun bundleExport(repo: Repository, path: String, refs: List<String>?) {
+    private fun bundleExport(repo: Repository, path: String, refs: List<String>?, squash: Boolean = false) {
         val allRefs = getLocalRefs(repo)
         val refsToExport: Set<String> = if (refs != null) {
             resolveRefNames(refs, allRefs.keys)
@@ -703,7 +707,12 @@ internal object MirrorOps {
         val writer = BundleWriter(repo)
         for (refName in refsToExport) {
             val sha = allRefs[refName] ?: continue
-            writer.include(refName, ObjectId.fromString(sha))
+            val oid = if (squash) {
+                squashCommit(repo, ObjectId.fromString(sha))
+            } else {
+                ObjectId.fromString(sha)
+            }
+            writer.include(refName, oid)
         }
         FileOutputStream(path).use { fos ->
             writer.writeBundle(NullProgressMonitor.INSTANCE, fos)
@@ -801,12 +810,18 @@ internal object MirrorOps {
         repo: Repository,
         path: String,
         resolved: Map<String, String>,
+        squash: Boolean = false,
     ) {
         val allRefs = getLocalRefs(repo)
         val writer = BundleWriter(repo)
         for ((src, dst) in resolved) {
             val sha = allRefs[src] ?: continue
-            writer.include(dst, ObjectId.fromString(sha))
+            val oid = if (squash) {
+                squashCommit(repo, ObjectId.fromString(sha))
+            } else {
+                ObjectId.fromString(sha)
+            }
+            writer.include(dst, oid)
         }
         FileOutputStream(path).use { fos ->
             writer.writeBundle(NullProgressMonitor.INSTANCE, fos)
@@ -874,6 +889,36 @@ internal object MirrorOps {
             }
         }
         return MirrorDiff(add = add, update = update, delete = emptyList())
+    }
+
+    /**
+     * Create a parentless commit with the same tree as the given commit.
+     *
+     * Used by squash mode to strip history from bundle exports.
+     */
+    private fun squashCommit(repo: Repository, commitId: ObjectId): ObjectId {
+        val revWalk = RevWalk(repo)
+        try {
+            val commit = revWalk.parseCommit(commitId)
+            val treeId = commit.tree.id
+
+            val inserter = repo.newObjectInserter()
+            try {
+                val newCommit = CommitBuilder()
+                newCommit.setTreeId(treeId)
+                // No parents — parentless commit
+                newCommit.setAuthor(PersonIdent("vost", "vost@localhost"))
+                newCommit.setCommitter(newCommit.author)
+                newCommit.setMessage("squash\n")
+                val squashedId = inserter.insert(newCommit)
+                inserter.flush()
+                return squashedId
+            } finally {
+                inserter.close()
+            }
+        } finally {
+            revWalk.close()
+        }
     }
 
     /**

@@ -293,3 +293,75 @@ class TestRefRenaming:
         assert "imported" in dst.branches
         assert "main" not in dst.branches
         assert dst.branches["imported"].read("f.txt") == b"data"
+
+    def test_bundle_export_squash(self, tmp_path):
+        """Squashed bundle has parentless commits."""
+        src = GitStore.open(str(tmp_path / "src.git"))
+        fs = src.branches["main"]
+        fs = fs.write("a.txt", b"first")
+        fs = fs.write("b.txt", b"second")  # 3 commits total (init + 2)
+
+        bundle_path = str(tmp_path / "squashed.bundle")
+        src.bundle_export(bundle_path, squash=True)
+
+        # Import into fresh repo
+        dst = GitStore.open(str(tmp_path / "dst.git"), branch=None)
+        dst.bundle_import(bundle_path)
+
+        # Should have the data
+        dst_fs = dst.branches["main"]
+        assert dst_fs.read("a.txt") == b"first"
+        assert dst_fs.read("b.txt") == b"second"
+
+        # Should have only 1 commit (the squashed root)
+        assert dst_fs.parent is None  # no parent = single commit
+
+    def test_bundle_export_squash_preserves_tree(self, tmp_path):
+        """Squashed commit has same tree hash as original."""
+        src = GitStore.open(str(tmp_path / "src.git"))
+        fs = src.branches["main"].write("data.txt", b"hello")
+
+        original_tree = fs.tree_hash
+        bundle_path = str(tmp_path / "sq.bundle")
+        src.bundle_export(bundle_path, squash=True)
+
+        dst = GitStore.open(str(tmp_path / "dst.git"), branch=None)
+        dst.bundle_import(bundle_path)
+        assert dst.branches["main"].tree_hash == original_tree
+
+    def test_bundle_export_squash_with_rename(self, tmp_path):
+        """Squashed bundle with ref renaming."""
+        src = GitStore.open(str(tmp_path / "src.git"))
+        src.branches["main"].write("f.txt", b"data")
+
+        bundle_path = str(tmp_path / "sq.bundle")
+        src.bundle_export(bundle_path, refs={"main": "renamed"}, squash=True)
+
+        dst = GitStore.open(str(tmp_path / "dst.git"), branch=None)
+        dst.bundle_import(bundle_path)
+        assert "renamed" in dst.branches
+        assert "main" not in dst.branches
+        assert dst.branches["renamed"].parent is None
+        assert dst.branches["renamed"].read("f.txt") == b"data"
+
+    def test_backup_squash(self, tmp_path):
+        """backup with squash=True produces squashed bundle."""
+        src = GitStore.open(str(tmp_path / "src.git"))
+        fs = src.branches["main"].write("f.txt", b"data")
+        fs.write("g.txt", b"more")
+
+        bundle_path = str(tmp_path / "backup.bundle")
+        src.backup(bundle_path, squash=True)
+
+        dst = GitStore.open(str(tmp_path / "dst.git"), branch=None)
+        dst.bundle_import(bundle_path)
+        assert dst.branches["main"].parent is None
+
+    def test_backup_squash_non_bundle_raises(self, tmp_path):
+        """squash=True on non-bundle backup raises ValueError."""
+        src = GitStore.open(str(tmp_path / "src.git"))
+        src.branches["main"].write("f.txt", b"data")
+
+        import pytest
+        with pytest.raises(ValueError, match="squash is only supported for bundle"):
+            src.backup(str(tmp_path / "remote.git"), squash=True)

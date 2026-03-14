@@ -775,7 +775,7 @@ fn bundle_export_import_with_ref_map() {
     export_map.insert("refs/heads/main".to_string(), "refs/heads/exported".to_string());
 
     store
-        .bundle_export(&bundle_path, None, Some(&export_map))
+        .bundle_export(&bundle_path, None, Some(&export_map), false)
         .unwrap();
 
     // Import into new store — bundle contains "exported", import as-is
@@ -817,7 +817,7 @@ fn bundle_import_with_ref_map() {
         .join("normal.bundle")
         .to_string_lossy()
         .to_string();
-    store.bundle_export(&bundle_path, None, None).unwrap();
+    store.bundle_export(&bundle_path, None, None, false).unwrap();
 
     // Import with rename: main → local-main
     let store2 = GitStore::open(
@@ -961,6 +961,155 @@ fn restore_bundle_with_ref_map() {
             .unwrap(),
         "hello"
     );
+}
+
+// ---------------------------------------------------------------------------
+// squash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bundle_export_squash_strips_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs = store.branches().get("main").unwrap();
+    let fs = fs.write("a.txt", b"v1", WriteOptions::default()).unwrap();
+    let _fs = fs.write("a.txt", b"v2", WriteOptions::default()).unwrap();
+
+    // Export with squash
+    let bundle_path = dir
+        .path()
+        .join("squash.bundle")
+        .to_string_lossy()
+        .to_string();
+    store
+        .bundle_export(&bundle_path, None, None, true)
+        .unwrap();
+
+    // Import into a new store
+    let store2 = GitStore::open(
+        dir.path().join("restored.git"),
+        OpenOptions {
+            create: true,
+            branch: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    store2.bundle_import(&bundle_path, None, None).unwrap();
+
+    // Data should be correct
+    assert_eq!(
+        store2
+            .branches()
+            .get("main")
+            .unwrap()
+            .read_text("a.txt")
+            .unwrap(),
+        "v2"
+    );
+
+    // The commit should have no parents (squashed)
+    let fs2 = store2.branches().get("main").unwrap();
+    let repo = git2::Repository::open_bare(store2.path()).unwrap();
+    let oid = git2::Oid::from_str(&fs2.commit_hash().unwrap()).unwrap();
+    let commit = repo.find_commit(oid).unwrap();
+    assert_eq!(commit.parent_count(), 0, "squashed commit should have no parents");
+}
+
+#[test]
+fn bundle_export_squash_preserves_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs = store.branches().get("main").unwrap();
+    let fs = fs.write("a.txt", b"hello", WriteOptions::default()).unwrap();
+    let _fs = fs.write("b.txt", b"world", WriteOptions::default()).unwrap();
+
+    // Get the original tree hash
+    let orig_fs = store.branches().get("main").unwrap();
+    let orig_tree_hash = orig_fs.tree_hash().unwrap();
+
+    // Export with squash
+    let bundle_path = dir
+        .path()
+        .join("squash-tree.bundle")
+        .to_string_lossy()
+        .to_string();
+    store
+        .bundle_export(&bundle_path, None, None, true)
+        .unwrap();
+
+    // Import into new store
+    let store2 = GitStore::open(
+        dir.path().join("restored.git"),
+        OpenOptions {
+            create: true,
+            branch: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    store2.bundle_import(&bundle_path, None, None).unwrap();
+
+    // Tree hash should match original
+    let fs2 = store2.branches().get("main").unwrap();
+    assert_eq!(fs2.tree_hash().unwrap(), orig_tree_hash);
+}
+
+#[test]
+fn backup_squash_to_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = common::create_store(dir.path(), "main");
+    let fs = store.branches().get("main").unwrap();
+    let fs = fs.write("a.txt", b"v1", WriteOptions::default()).unwrap();
+    let _fs = fs.write("a.txt", b"v2", WriteOptions::default()).unwrap();
+
+    let bundle_path = dir
+        .path()
+        .join("backup-squash.bundle")
+        .to_string_lossy()
+        .to_string();
+    let diff = store
+        .backup(
+            &bundle_path,
+            &BackupOptions {
+                squash: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert!(!diff.in_sync());
+
+    // Import into new store and verify squash
+    let store2 = GitStore::open(
+        dir.path().join("restored.git"),
+        OpenOptions {
+            create: true,
+            branch: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    store2
+        .restore(&bundle_path, &RestoreOptions::default())
+        .unwrap();
+
+    assert_eq!(
+        store2
+            .branches()
+            .get("main")
+            .unwrap()
+            .read_text("a.txt")
+            .unwrap(),
+        "v2"
+    );
+
+    // Verify no parents
+    let fs2 = store2.branches().get("main").unwrap();
+    let repo = git2::Repository::open_bare(store2.path()).unwrap();
+    let oid = git2::Oid::from_str(&fs2.commit_hash().unwrap()).unwrap();
+    let commit = repo.find_commit(oid).unwrap();
+    assert_eq!(commit.parent_count(), 0);
 }
 
 #[test]

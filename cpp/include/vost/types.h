@@ -447,6 +447,9 @@ struct BackupOptions {
     /// destination ref names (both may be short or full).  When set, takes
     /// precedence over `refs`.
     std::map<std::string, std::string> ref_map;
+    /// If true, each ref gets a parentless commit with the same tree,
+    /// stripping all history from the exported bundle.
+    bool squash = false;
 };
 
 /// Options for restore operations.

@@ -350,6 +350,7 @@ export async function bundleExport(
   store: GitStore,
   destPath: string,
   refs?: RefSpec,
+  squash?: boolean,
 ): Promise<void> {
   const fsModule = store._fsModule;
   const gitdir = store._gitdir;
@@ -381,7 +382,33 @@ export async function bundleExport(
   }
 
   // Collect all reachable OIDs (from source refs)
-  const startOids = [...new Set([...srcToDestMap.keys()].map(k => localRefs.get(k)!))];
+  let startOids = [...new Set([...srcToDestMap.keys()].map(k => localRefs.get(k)!))];
+
+  // When squashing, create parentless commits with the same tree for each ref
+  let squashedMap: Map<string, string> | undefined;
+  if (squash) {
+    squashedMap = new Map(); // originalOid → squashedOid
+    const now = Math.floor(Date.now() / 1000);
+    for (const oid of startOids) {
+      if (squashedMap.has(oid)) continue;
+      const obj = await git.readObject({ fs: fsModule, gitdir, oid, format: 'parsed' });
+      const commit = obj.object as any;
+      const squashedOid = await git.writeCommit({
+        fs: fsModule,
+        gitdir,
+        commit: {
+          message: 'squash\n',
+          tree: commit.tree,
+          parent: [],
+          author: { name: 'vost', email: 'vost@localhost', timestamp: now, timezoneOffset: 0 },
+          committer: { name: 'vost', email: 'vost@localhost', timestamp: now, timezoneOffset: 0 },
+        },
+      });
+      squashedMap.set(oid, squashedOid);
+    }
+    startOids = [...new Set([...squashedMap.values()])];
+  }
+
   const allOids = await collectReachableOids(fsModule, gitdir, startOids);
 
   // Create packfile
@@ -395,10 +422,11 @@ export async function bundleExport(
     throw new Error('packObjects returned no data');
   }
 
-  // Build bundle v2 header — use dest names
+  // Build bundle v2 header — use dest names (and squashed OIDs if squashing)
   let header = '# v2 git bundle\n';
   for (const [srcRef, destRef] of srcToDestMap) {
-    const sha = localRefs.get(srcRef)!;
+    const originalSha = localRefs.get(srcRef)!;
+    const sha = squashedMap ? squashedMap.get(originalSha)! : originalSha;
     header += `${sha} ${destRef}\n`;
   }
   header += '\n';
@@ -707,6 +735,7 @@ export async function backup(
     onAuth?: Function;
     refs?: RefSpec;
     format?: string;
+    squash?: boolean;
   } = {},
 ): Promise<MirrorDiff> {
   const useBundle = opts.format === 'bundle' || isBundlePath(url);
@@ -735,7 +764,7 @@ export async function backup(
     const diff: MirrorDiff = { add, update: [], delete: [] };
 
     if (!opts.dryRun) {
-      await bundleExport(store, url, opts.refs);
+      await bundleExport(store, url, opts.refs, opts.squash);
     }
     return diff;
   }
