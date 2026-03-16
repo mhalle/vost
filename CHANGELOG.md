@@ -4,6 +4,51 @@ All notable changes to vost are documented in this file.
 
 ## Unreleased
 
+## v0.76.0 / Rust v0.10.0 (2026-03-16)
+
+**Added (Rust CLI):**
+
+- Feature-identical Rust CLI behind `cli` feature gate (32 commands matching Python CLI)
+- `serve` — HTTP file server with single-ref/multi-ref modes, ETag/304, CORS, JSON API, directory listings, `--base-path`, `--open`, `--max-file-size`, `--log-file` (CLF access log)
+- Cross-port CLI testing: `VOST_CLI=rust` runs Python test suite against Rust binary (437 tests)
+- `make test-rs-cli` target
+
+**Added (Rust library):**
+
+- Multi-source `copy_in(&[&str], dest, opts)` / `copy_out(&[&str], dest, opts)` — file/dir/contents mode, `/./` pivot, matching Python/TS/Kotlin API
+- `CopyInOptions.follow_symlinks` — dereference symlinks during copy, with cycle detection
+- `ExcludeFilter.gitignore` — per-directory `.gitignore` loading during walk
+- `SyncOptions.ignore_errors` — skip unreadable files and continue
+- Mtime-based skip when `checksum=false` — only re-copies files modified after the commit timestamp
+- `sync_in` / `sync_out` now take string paths (not `&Path`)
+- `Fs::at_commit(hash)` — navigate to a commit hash preserving ref context
+- `GitStore::create_empty_branch(name)` — create a root branch without direct git2 access
+- `hash_blob(data)` — compute git blob SHA without a repository
+- `disk_glob_ext()` with follow_symlinks and exclude_filter
+- Short hash resolution via `revparse_single` in `GitStore::fs()`
+
+**Added (Python):**
+
+- `serve --max-file-size` — limit served file size (default 250 MB, 413 for oversized)
+- `serve --log-file` — CLF access log to file, structured error logging via `logging`
+
+**Fixed (all ports):**
+
+- `--delete` + `--exclude` now preserves excluded files in destination (rsync behavior). Previously excluded files were incorrectly deleted. Validated against rsync with new `test_rsync_compat.py` suite.
+
+**Changed (Rust library — breaking):**
+
+- `Fs::copy_in` signature changed from `(src: &Path, dest, opts)` to `(sources: &[&str], dest, opts)`
+- `Fs::copy_out` signature changed from `(src: &str, dest: &Path, opts)` to `(sources: &[&str], dest: &str, opts)`
+- `Fs::sync_in` signature changed from `(src: &Path, dest, opts)` to `(src: &str, dest, opts)`
+- `Fs::sync_out` signature changed from `(src: &str, dest: &Path, opts)` to `(src: &str, dest: &str, opts)`
+
+**Documentation:**
+
+- `docs/testing.md` — cross-port CLI testing guide
+- `docs/cli.md` — `--delete` + `--exclude` interaction documented
+- `docs/api.md` — exclude preservation noted in copy/sync overview
+
 ## v0.75.2 / TS v0.9.9 / Rust v0.9.8 / C++ v0.9.1 / Kotlin v0.9.10 (2026-03-15)
 
 **Added (all ports):**
