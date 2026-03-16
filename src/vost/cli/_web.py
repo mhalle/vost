@@ -38,13 +38,58 @@ _MIME_OVERRIDES = {
     "application/x-yaml": "text/plain; charset=utf-8",
 }
 
+# Extensions that should be served as text/plain when mimetypes doesn't
+# recognize them.  Covers source code, config, and data formats.
+_TEXT_EXTENSIONS = frozenset((
+    # Programming languages
+    ".py", ".pyi", ".pyw", ".rs", ".go", ".c", ".h", ".cpp", ".hpp", ".cc",
+    ".cxx", ".hxx", ".cs", ".java", ".kt", ".kts", ".scala", ".clj",
+    ".cljs", ".erl", ".ex", ".exs", ".hs", ".ml", ".mli", ".fs", ".fsi",
+    ".fsx", ".r", ".R", ".jl", ".lua", ".rb", ".pl", ".pm", ".php",
+    ".swift", ".m", ".mm", ".v", ".sv", ".vhd", ".vhdl", ".zig", ".nim",
+    ".d", ".ada", ".adb", ".ads", ".pas", ".pp",
+    # Shell / scripting
+    ".sh", ".bash", ".zsh", ".fish", ".csh", ".ksh", ".ps1", ".psm1",
+    ".bat", ".cmd",
+    # Web / markup
+    ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".astro",
+    ".sass", ".scss", ".less", ".styl",
+    ".pug", ".slim", ".haml", ".ejs", ".hbs", ".mustache",
+    ".graphql", ".gql", ".proto",
+    # Config / data
+    ".toml", ".ini", ".cfg", ".conf", ".env", ".properties",
+    ".editorconfig", ".gitignore", ".gitattributes", ".dockerignore",
+    ".flake8", ".pylintrc", ".rubocop",
+    ".nix", ".dhall", ".tf", ".hcl",
+    ".cmake", ".mk", ".makefile",
+    # Documentation / text
+    ".rst", ".tex", ".bib", ".adoc", ".org", ".wiki",
+    ".diff", ".patch",
+    # Data formats
+    ".jsonl", ".ndjson", ".jsonc", ".json5",
+    ".sql", ".graphql",
+    ".dot", ".gv",
+    ".srt", ".vtt", ".ass",
+))
+
 
 def _guess_mime(path):
     """Return a browser-friendly MIME type for *path*."""
     mime, _ = mimetypes.guess_type(path)
-    if mime is None:
-        return "application/octet-stream"
-    return _MIME_OVERRIDES.get(mime, mime)
+    if mime is not None:
+        return _MIME_OVERRIDES.get(mime, mime)
+    # Check for known text extensions
+    dot = path.rfind(".")
+    if dot >= 0 and path[dot:].lower() in _TEXT_EXTENSIONS:
+        return "text/plain; charset=utf-8"
+    # Dotfiles without extension (Makefile, Dockerfile, etc.)
+    basename = path.rsplit("/", 1)[-1]
+    if basename in ("Makefile", "Dockerfile", "Vagrantfile", "Gemfile",
+                    "Rakefile", "Procfile", "Brewfile", "Justfile",
+                    "CMakeLists.txt", "OWNERS", "CODEOWNERS",
+                    "LICENSE", "LICENCE", "AUTHORS", "CONTRIBUTORS"):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
 
 
 def _href(*segments: str) -> str:
@@ -373,11 +418,21 @@ def _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag
     """Serve directory listing as JSON or HTML."""
     entries = fs.ls(path if path else None)
 
+    # Classify entries as files or directories
+    dir_entries = []
+    for entry in sorted(entries):
+        entry_path = f"{path}/{entry}" if path else entry
+        is_dir = fs.is_dir(entry_path)
+        dir_entries.append((entry, is_dir))
+
     if want_json:
+        json_entries = []
+        for entry, is_dir in dir_entries:
+            json_entries.append(entry + "/" if is_dir else entry)
         body = json.dumps({
             "path": path,
             "ref": ref_label,
-            "entries": sorted(entries),
+            "entries": json_entries,
             "type": "directory",
         }).encode()
         start_response("200 OK", [
@@ -391,9 +446,12 @@ def _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag
     # HTML listing
     display_path = path or "/"
     lines = ["<html><body>", f"<h1>{html.escape(display_path)}</h1>", "<ul>"]
-    for entry in sorted(entries):
-        href = _href(link_prefix, path, entry) if path else _href(link_prefix, entry)
-        lines.append(f'<li><a href="{href}">{html.escape(entry)}</a></li>')
+    for entry, is_dir in dir_entries:
+        suffix = "/" if is_dir else ""
+        entry_href = _href(link_prefix, path, entry) if path else _href(link_prefix, entry)
+        if is_dir:
+            entry_href += "/"
+        lines.append(f'<li><a href="{entry_href}">{html.escape(entry)}{suffix}</a></li>')
     lines.append("</ul>")
     lines.append("</body></html>")
     body = "\n".join(lines).encode()

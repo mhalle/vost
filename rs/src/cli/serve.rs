@@ -52,20 +52,50 @@ pub struct ServeArgs {
 fn guess_mime(path: &str) -> &'static str {
     let ext = path.rsplit('.').next().unwrap_or("");
     match ext.to_lowercase().as_str() {
+        // Markup
         "html" | "htm" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "js" | "mjs" => "text/javascript; charset=utf-8",
-        "json" => "text/plain; charset=utf-8",      // browser-friendly override
-        "geojson" => "text/plain; charset=utf-8",
         "xml" => "text/xml; charset=utf-8",
-        "yaml" | "yml" => "text/plain; charset=utf-8",
-        "txt" | "md" | "csv" | "tsv" | "log" => "text/plain; charset=utf-8",
+        "svg" => "image/svg+xml",
+        // Text/data (browser-friendly: display, don't download)
+        "json" | "geojson" | "jsonl" | "ndjson" | "jsonc" | "json5"
+            => "text/plain; charset=utf-8",
+        "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "env"
+        | "properties" | "editorconfig"
+            => "text/plain; charset=utf-8",
+        "txt" | "md" | "csv" | "tsv" | "log" | "rst" | "tex" | "bib"
+        | "adoc" | "org" | "diff" | "patch"
+            => "text/plain; charset=utf-8",
+        // Programming languages
+        "py" | "pyi" | "rs" | "go" | "c" | "h" | "cpp" | "hpp" | "cc"
+        | "cxx" | "hxx" | "cs" | "java" | "kt" | "kts" | "scala"
+        | "clj" | "cljs" | "erl" | "ex" | "exs" | "hs" | "ml" | "mli"
+        | "r" | "jl" | "lua" | "rb" | "pl" | "pm" | "php" | "swift"
+        | "m" | "v" | "zig" | "nim" | "d" | "ada" | "pas"
+            => "text/plain; charset=utf-8",
+        // Shell / scripting
+        "sh" | "bash" | "zsh" | "fish" | "csh" | "ksh"
+        | "ps1" | "bat" | "cmd"
+            => "text/plain; charset=utf-8",
+        // Web
+        "ts" | "tsx" | "jsx" | "vue" | "svelte" | "astro"
+        | "sass" | "scss" | "less" | "styl"
+        | "pug" | "hbs" | "mustache" | "ejs"
+        | "graphql" | "gql" | "proto"
+            => "text/plain; charset=utf-8",
+        // Build / config
+        "cmake" | "mk" | "makefile" | "nix" | "tf" | "hcl"
+        | "dockerfile" | "gitignore" | "gitattributes" | "dockerignore"
+        | "sql" | "dot" | "gv"
+            => "text/plain; charset=utf-8",
+        // Images
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
-        "svg" => "image/svg+xml",
         "webp" => "image/webp",
         "ico" => "image/x-icon",
+        // Binary
         "pdf" => "application/pdf",
         "wasm" => "application/wasm",
         "zip" => "application/zip",
@@ -80,7 +110,18 @@ fn guess_mime(path: &str) -> &'static str {
         "mp3" => "audio/mpeg",
         "ogg" => "audio/ogg",
         "wav" => "audio/wav",
-        _ => "application/octet-stream",
+        _ => {
+            // Check for well-known extensionless filenames
+            let basename = path.rsplit('/').next().unwrap_or(path);
+            match basename {
+                "Makefile" | "Dockerfile" | "Vagrantfile" | "Gemfile"
+                | "Rakefile" | "Procfile" | "Brewfile" | "Justfile"
+                | "CMakeLists.txt" | "OWNERS" | "CODEOWNERS"
+                | "LICENSE" | "LICENCE" | "AUTHORS" | "CONTRIBUTORS"
+                    => "text/plain; charset=utf-8",
+                _ => "application/octet-stream",
+            }
+        }
     }
 }
 
@@ -348,17 +389,38 @@ fn serve_dir(
         headers.push(("Cache-Control", "no-store"));
     }
 
-    let sorted: Vec<&String> = {
-        let mut v: Vec<&String> = entries.iter().collect();
-        v.sort();
-        v
-    };
+    let mut sorted: Vec<&String> = entries.iter().collect();
+    sorted.sort();
+
+    // Classify entries as files or directories
+    let classified: Vec<(&String, bool)> = sorted
+        .iter()
+        .map(|name| {
+            let entry_path = if path.is_empty() {
+                name.to_string()
+            } else {
+                format!("{}/{}", path, name)
+            };
+            let is_dir = fs.is_dir(&entry_path).unwrap_or(false);
+            (*name, is_dir)
+        })
+        .collect();
 
     if want_json {
+        let json_entries: Vec<String> = classified
+            .iter()
+            .map(|(name, is_dir)| {
+                if *is_dir {
+                    format!("{}/", name)
+                } else {
+                    name.to_string()
+                }
+            })
+            .collect();
         let json = serde_json::json!({
             "path": path,
             "ref": ref_label,
-            "entries": sorted,
+            "entries": json_entries,
             "type": "directory",
         });
         let body = json.to_string();
@@ -369,16 +431,20 @@ fn serve_dir(
             "<html><body><h1>{}</h1><ul>",
             html_escape(display_path)
         );
-        for entry in &sorted {
+        for (entry, is_dir) in &classified {
             let h = if path.is_empty() {
                 href(link_prefix, &[entry])
             } else {
                 href(link_prefix, &[path, entry])
             };
+            let suffix = if *is_dir { "/" } else { "" };
+            let href_suffix = if *is_dir { "/" } else { "" };
             html.push_str(&format!(
-                "<li><a href=\"{}\">{}</a></li>",
+                "<li><a href=\"{}{}\">{}{}</a></li>",
                 h,
-                html_escape(entry)
+                href_suffix,
+                html_escape(entry),
+                suffix,
             ));
         }
         html.push_str("</ul></body></html>");

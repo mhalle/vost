@@ -279,7 +279,7 @@ class TestSingleRefLinks:
         html = body.decode()
         # Links should be /hello.txt, not /main/hello.txt
         assert 'href="/hello.txt"' in html
-        assert 'href="/data"' in html
+        assert 'href="/data/"' in html
         assert 'href="/main/' not in html
 
     def test_subdir_links_no_ref_prefix(self, store_with_files):
@@ -304,7 +304,7 @@ class TestMultiRefLinks:
         _, _, body = _wsgi_get(app, "/main/")
         html = body.decode()
         assert 'href="/main/hello.txt"' in html
-        assert 'href="/main/data"' in html
+        assert 'href="/main/data/"' in html
 
     def test_subdir_links_include_ref(self, store_with_files):
         app = _make_app(store_with_files)
