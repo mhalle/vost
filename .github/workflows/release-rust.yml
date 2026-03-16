@@ -20,7 +20,7 @@ jobs:
             os: macos-latest
             name: vost-aarch64-apple-darwin
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             name: vost-x86_64-apple-darwin
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
