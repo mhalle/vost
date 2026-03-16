@@ -10,6 +10,15 @@ fn create_disk_files(dir: &Path) {
     std::fs::write(dir.join("sub/deep.txt"), b"deep").unwrap();
 }
 
+/// Helper: convert a directory Path to a string with trailing `/` for copy_in contents mode.
+fn dir_src(p: &Path) -> String {
+    let mut s = p.to_str().unwrap().to_string();
+    if !s.ends_with('/') {
+        s.push('/');
+    }
+    s
+}
+
 // ---------------------------------------------------------------------------
 // copy_in
 // ---------------------------------------------------------------------------
@@ -22,7 +31,8 @@ fn copy_in_basic() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    let (report, fs) = fs.copy_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    let (report, fs) = fs.copy_in(&[&src_str], "", Default::default()).unwrap();
     assert!(report.total() > 0);
 
     assert_eq!(fs.read_text("file1.txt").unwrap(), "one");
@@ -37,7 +47,8 @@ fn copy_in_nested() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", Default::default()).unwrap();
 
     let fs = store.branches().get("main").unwrap();
     assert!(fs.exists("sub/deep.txt").unwrap());
@@ -51,7 +62,8 @@ fn copy_in_with_dest_prefix() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "imported", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "imported", Default::default()).unwrap();
 
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read_text("imported/file1.txt").unwrap(), "one");
@@ -65,7 +77,8 @@ fn copy_in_include_filter() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", fs::CopyInOptions {
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         include: Some(vec!["*.txt".into()]),
         ..Default::default()
     })
@@ -83,7 +96,8 @@ fn copy_in_exclude_filter() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", fs::CopyInOptions {
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         exclude: Some(vec!["sub/*".into()]),
         ..Default::default()
     })
@@ -105,7 +119,8 @@ fn copy_out_basic() {
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
 
-    let report = fs.copy_out("", &dest, Default::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    let report = fs.copy_out(&[""], dest_str, Default::default()).unwrap();
     assert!(report.total() > 0);
     assert_eq!(std::fs::read_to_string(dest.join("hello.txt")).unwrap(), "hello");
 }
@@ -117,7 +132,8 @@ fn copy_out_creates_dirs() {
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
 
-    fs.copy_out("", &dest, Default::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    fs.copy_out(&[""], dest_str, Default::default()).unwrap();
     assert!(dest.join("dir").is_dir());
     assert_eq!(
         std::fs::read_to_string(dest.join("dir/a.txt")).unwrap(),
@@ -141,7 +157,8 @@ fn copy_out_preserves_executable() {
 
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
-    fs.copy_out("", &dest, Default::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    fs.copy_out(&[""], dest_str, Default::default()).unwrap();
 
     let meta = std::fs::metadata(dest.join("run.sh")).unwrap();
     assert!(meta.permissions().mode() & 0o111 != 0);
@@ -161,7 +178,8 @@ fn copy_out_preserves_symlinks() {
 
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
-    fs.copy_out("", &dest, Default::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    fs.copy_out(&[""], dest_str, Default::default()).unwrap();
 
     let link_target = std::fs::read_link(dest.join("link")).unwrap();
     assert_eq!(link_target.to_string_lossy(), "target.txt");
@@ -174,7 +192,8 @@ fn copy_out_include_filter() {
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
 
-    fs.copy_out("", &dest, fs::CopyOutOptions {
+    let dest_str = dest.to_str().unwrap();
+    fs.copy_out(&[""], dest_str, fs::CopyOutOptions {
         include: Some(vec!["*.txt".into()]),
         ..Default::default()
     })
@@ -190,7 +209,8 @@ fn copy_out_exclude_filter() {
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
 
-    fs.copy_out("", &dest, fs::CopyOutOptions {
+    let dest_str = dest.to_str().unwrap();
+    fs.copy_out(&[""], dest_str, fs::CopyOutOptions {
         exclude: Some(vec!["dir/*".into()]),
         ..Default::default()
     })
@@ -211,7 +231,8 @@ fn copy_out_root_roundtrip() {
     let dest = dir.path().join("exported");
     std::fs::create_dir(&dest).unwrap();
 
-    fs.copy_out("", &dest, fs::CopyOutOptions::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    fs.copy_out(&[""], dest_str, fs::CopyOutOptions::default()).unwrap();
     assert_eq!(std::fs::read_to_string(dest.join("hello.txt")).unwrap(), "hello");
     assert_eq!(std::fs::read_to_string(dest.join("dir/a.txt")).unwrap(), "aaa");
     assert_eq!(std::fs::read_to_string(dest.join("dir/b.txt")).unwrap(), "bbb");
@@ -229,7 +250,8 @@ fn sync_in_basic() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    let (report, fs) = fs.sync_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    let (report, fs) = fs.sync_in(&src_str, "", Default::default()).unwrap();
     assert!(report.total() > 0);
 
     assert_eq!(fs.read_text("file1.txt").unwrap(), "one");
@@ -242,7 +264,8 @@ fn sync_out_basic() {
     let dest = dir.path().join("synced");
     std::fs::create_dir(&dest).unwrap();
 
-    let report = fs.sync_out("", &dest, Default::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    let report = fs.sync_out("", dest_str, Default::default()).unwrap();
     assert!(report.total() > 0);
     assert_eq!(std::fs::read_to_string(dest.join("hello.txt")).unwrap(), "hello");
 }
@@ -331,7 +354,8 @@ fn copy_in_empty_file() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", Default::default()).unwrap();
 
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read("empty.txt").unwrap(), b"");
@@ -347,7 +371,8 @@ fn copy_in_binary_data() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", Default::default()).unwrap();
 
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read("binary.bin").unwrap(), data);
@@ -362,7 +387,8 @@ fn copy_in_deep_nesting() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", Default::default()).unwrap();
 
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read_text("a/b/c/d/deep.txt").unwrap(), "deep");
@@ -376,7 +402,8 @@ fn copy_in_custom_message() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", fs::CopyInOptions {
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         message: Some("import files".into()),
         ..Default::default()
     })
@@ -398,8 +425,9 @@ fn copy_out_subdirectory() {
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
 
-    fs.copy_out("dir", &dest, Default::default()).unwrap();
-    // copy_out("dir") walks the "dir" tree, so paths are relative to it
+    let dest_str = dest.to_str().unwrap();
+    fs.copy_out(&["dir/"], dest_str, Default::default()).unwrap();
+    // copy_out("dir/") uses contents mode, so paths are relative to dir
     assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "aaa");
     assert_eq!(std::fs::read_to_string(dest.join("b.txt")).unwrap(), "bbb");
     // hello.txt should not be exported (it's outside "dir")
@@ -413,8 +441,9 @@ fn copy_out_single_file() {
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
 
+    let dest_str = dest.to_str().unwrap();
     // Export just the root which includes hello.txt
-    fs.copy_out("", &dest, fs::CopyOutOptions {
+    fs.copy_out(&[""], dest_str, fs::CopyOutOptions {
         include: Some(vec!["hello.txt".into()]),
         ..Default::default()
     })
@@ -434,15 +463,16 @@ fn sync_in_idempotent() {
     create_disk_files(&src);
 
     let store = common::create_store(dir.path(), "main");
+    let src_str = dir_src(&src);
 
     // First sync
     let fs = store.branches().get("main").unwrap();
-    fs.sync_in(&src, "", Default::default()).unwrap();
+    fs.sync_in(&src_str, "", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
     let hash1 = fs.commit_hash().unwrap();
 
     // Second sync with same files — should be no-op
-    fs.sync_in(&src, "", Default::default()).unwrap();
+    fs.sync_in(&src_str, "", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
     let hash2 = fs.commit_hash().unwrap();
 
@@ -461,7 +491,8 @@ fn copy_out_root_empty_repo() {
     let dest = dir.path().join("exported");
     std::fs::create_dir(&dest).unwrap();
 
-    let report = fs.copy_out("", &dest, fs::CopyOutOptions::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    let report = fs.copy_out(&[""], dest_str, fs::CopyOutOptions::default()).unwrap();
     assert_eq!(report.total(), 0);
 }
 
@@ -521,7 +552,8 @@ fn copy_in_overwrites_existing() {
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read_text("hello.txt").unwrap(), "hello");
 
-    fs.copy_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read_text("hello.txt").unwrap(), "new content");
 }
@@ -536,7 +568,8 @@ fn copy_in_unicode_filenames() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", Default::default()).unwrap();
 
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read_text("café.txt").unwrap(), "latte");
@@ -555,7 +588,8 @@ fn copy_out_empty_store() {
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
 
-    let report = fs.copy_out("", &dest, Default::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    let report = fs.copy_out(&[""], dest_str, Default::default()).unwrap();
     assert_eq!(report.total(), 0);
 }
 
@@ -570,7 +604,8 @@ fn sync_out_basic_with_filters() {
     let dest = dir.path().join("synced");
     std::fs::create_dir(&dest).unwrap();
 
-    let report = fs.sync_out("", &dest, fs::SyncOptions {
+    let dest_str = dest.to_str().unwrap();
+    let report = fs.sync_out("", dest_str, fs::SyncOptions {
         include: Some(vec!["hello.txt".into()]),
         ..Default::default()
     })
@@ -640,7 +675,8 @@ fn copy_in_preserves_executable() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
-    fs.copy_in(&src, "", Default::default()).unwrap();
+    let src_str = dir_src(&src);
+    fs.copy_in(&[&src_str], "", Default::default()).unwrap();
 
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.file_type("run.sh").unwrap(), FileType::Executable);
@@ -660,7 +696,8 @@ fn copy_in_dry_run() {
     let fs = store.branches().get("main").unwrap();
     let hash_before = fs.commit_hash().unwrap();
 
-    let (report, _) = fs.copy_in(&src, "", fs::CopyInOptions {
+    let src_str = dir_src(&src);
+    let (report, _) = fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         dry_run: true,
         ..Default::default()
     })
@@ -687,9 +724,10 @@ fn sync_in_detects_updates() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // Initial sync
-    fs.sync_in(&src, "", Default::default()).unwrap();
+    fs.sync_in(&src_str, "", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read_text("file1.txt").unwrap(), "one");
 
@@ -697,7 +735,7 @@ fn sync_in_detects_updates() {
     std::fs::write(src.join("file1.txt"), b"updated").unwrap();
 
     // Second sync should detect the update
-    let (report, _) = fs.sync_in(&src, "", Default::default()).unwrap();
+    let (report, _) = fs.sync_in(&src_str, "", Default::default()).unwrap();
     assert!(!report.update.is_empty());
     assert!(report.update.iter().any(|f| f.path == "file1.txt"));
 
@@ -713,9 +751,10 @@ fn sync_in_detects_deletes() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // Initial sync
-    let (_, _) = fs.sync_in(&src, "", Default::default()).unwrap();
+    let (_, _) = fs.sync_in(&src_str, "", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
     assert!(fs.exists("file2.txt").unwrap());
 
@@ -723,7 +762,7 @@ fn sync_in_detects_deletes() {
     std::fs::remove_file(src.join("file2.txt")).unwrap();
 
     // Second sync should detect the deletion
-    let (report, _) = fs.sync_in(&src, "", Default::default()).unwrap();
+    let (report, _) = fs.sync_in(&src_str, "", Default::default()).unwrap();
     assert!(!report.delete.is_empty());
     assert!(report.delete.iter().any(|f| f.path == "file2.txt"));
 
@@ -739,16 +778,17 @@ fn sync_in_detects_adds() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // Initial sync
-    fs.sync_in(&src, "", Default::default()).unwrap();
+    fs.sync_in(&src_str, "", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
 
     // Add a new file on disk
     std::fs::write(src.join("new_file.txt"), b"new").unwrap();
 
     // Second sync should detect the addition
-    let (report, _) = fs.sync_in(&src, "", Default::default()).unwrap();
+    let (report, _) = fs.sync_in(&src_str, "", Default::default()).unwrap();
     assert!(!report.add.is_empty());
     assert!(report.add.iter().any(|f| f.path == "new_file.txt"));
 
@@ -764,14 +804,15 @@ fn sync_in_noop_when_unchanged() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // Initial sync
-    fs.sync_in(&src, "", Default::default()).unwrap();
+    fs.sync_in(&src_str, "", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
     let hash_after_first = fs.commit_hash().unwrap();
 
     // Second sync with no changes — should be no-op
-    let (report, _) = fs.sync_in(&src, "", Default::default()).unwrap();
+    let (report, _) = fs.sync_in(&src_str, "", Default::default()).unwrap();
     assert_eq!(report.total(), 0);
 
     let fs = store.branches().get("main").unwrap();
@@ -786,9 +827,10 @@ fn sync_in_dry_run() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // Initial sync
-    fs.sync_in(&src, "", Default::default()).unwrap();
+    fs.sync_in(&src_str, "", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
     let hash_after_first = fs.commit_hash().unwrap();
 
@@ -797,7 +839,7 @@ fn sync_in_dry_run() {
     std::fs::remove_file(src.join("file2.txt")).unwrap();
 
     // Dry run: should report changes but not commit
-    let (report, _) = fs.sync_in(&src, "", fs::SyncOptions {
+    let (report, _) = fs.sync_in(&src_str, "", fs::SyncOptions {
         dry_run: true,
         ..Default::default()
     })
@@ -822,8 +864,10 @@ fn sync_out_deletes_extra_files() {
     let dest = dir.path().join("synced");
     std::fs::create_dir(&dest).unwrap();
 
+    let dest_str = dest.to_str().unwrap();
+
     // First sync: writes hello.txt, dir/a.txt, dir/b.txt
-    fs.sync_out("", &dest, Default::default()).unwrap();
+    fs.sync_out("", dest_str, Default::default()).unwrap();
     assert!(dest.join("hello.txt").exists());
     assert!(dest.join("dir/a.txt").exists());
 
@@ -833,7 +877,7 @@ fn sync_out_deletes_extra_files() {
     std::fs::write(dest.join("orphan_dir/stale.txt"), b"stale").unwrap();
 
     // Second sync should delete the extra files
-    let report = fs.sync_out("", &dest, Default::default()).unwrap();
+    let report = fs.sync_out("", dest_str, Default::default()).unwrap();
     assert!(!dest.join("extra.txt").exists());
     assert!(!dest.join("orphan_dir/stale.txt").exists());
     // Orphan dir should be pruned
@@ -856,15 +900,17 @@ fn sync_out_updates_changed_files() {
     let dest = dir.path().join("synced");
     std::fs::create_dir(&dest).unwrap();
 
+    let dest_str = dest.to_str().unwrap();
+
     // First sync
-    fs.sync_out("", &dest, Default::default()).unwrap();
+    fs.sync_out("", dest_str, Default::default()).unwrap();
     assert_eq!(std::fs::read_to_string(dest.join("file.txt")).unwrap(), "original");
 
     // Modify the local file to something different
     std::fs::write(dest.join("file.txt"), b"modified locally").unwrap();
 
     // Sync again — should overwrite with repo content
-    let report = fs.sync_out("", &dest, Default::default()).unwrap();
+    let report = fs.sync_out("", dest_str, Default::default()).unwrap();
     assert_eq!(std::fs::read_to_string(dest.join("file.txt")).unwrap(), "original");
     assert!(!report.update.is_empty());
 }
@@ -879,14 +925,15 @@ fn sync_out_prunes_empty_dirs() {
 
     let dest = dir.path().join("synced");
     std::fs::create_dir(&dest).unwrap();
-    fs.sync_out("", &dest, Default::default()).unwrap();
+    let dest_str = dest.to_str().unwrap();
+    fs.sync_out("", dest_str, Default::default()).unwrap();
 
     // Create a deep directory structure with files not in repo
     std::fs::create_dir_all(dest.join("a/b/c")).unwrap();
     std::fs::write(dest.join("a/b/c/orphan.txt"), b"orphan").unwrap();
 
     // Sync should delete the orphan and prune the empty dirs
-    fs.sync_out("", &dest, Default::default()).unwrap();
+    fs.sync_out("", dest_str, Default::default()).unwrap();
     assert!(!dest.join("a/b/c/orphan.txt").exists());
     assert!(!dest.join("a/b/c").exists());
     assert!(!dest.join("a/b").exists());
@@ -905,9 +952,10 @@ fn copy_in_checksum_skips_unchanged() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // First copy_in
-    let (report1, _) = fs.copy_in(&src, "", fs::CopyInOptions {
+    let (report1, _) = fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         checksum: true,
         ..Default::default()
     })
@@ -917,7 +965,7 @@ fn copy_in_checksum_skips_unchanged() {
     let hash_after_first = fs.commit_hash().unwrap();
 
     // Second copy_in with same files + checksum=true → should be no-op
-    let (report2, _) = fs.copy_in(&src, "", fs::CopyInOptions {
+    let (report2, _) = fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         checksum: true,
         ..Default::default()
     })
@@ -935,22 +983,31 @@ fn copy_in_no_checksum_always_writes() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // First copy_in with checksum=false
-    fs.copy_in(&src, "", fs::CopyInOptions {
+    fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         checksum: false,
         ..Default::default()
     })
     .unwrap();
     let fs = store.branches().get("main").unwrap();
 
+    // Touch files so their mtime is newer than the commit time
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    for name in &["file1.txt", "file2.txt", "sub/deep.txt"] {
+        let p = src.join(name);
+        let content = std::fs::read(&p).unwrap();
+        std::fs::write(&p, &content).unwrap();
+    }
+
     // Second copy_in with checksum=false → should still report all files
-    let (report, _) = fs.copy_in(&src, "", fs::CopyInOptions {
+    let (report, _) = fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         checksum: false,
         ..Default::default()
     })
     .unwrap();
-    // Without checksum, all files are included in the report even if unchanged
+    // Without checksum, all files with newer mtime are included in the report
     assert!(report.total() > 0);
 }
 
@@ -962,9 +1019,10 @@ fn copy_in_checksum_detects_changes() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // First copy_in
-    fs.copy_in(&src, "", fs::CopyInOptions {
+    fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         checksum: true,
         ..Default::default()
     })
@@ -975,7 +1033,7 @@ fn copy_in_checksum_detects_changes() {
     std::fs::write(src.join("file1.txt"), b"changed content").unwrap();
 
     // Second copy_in with checksum → should detect the change
-    let (report, _) = fs.copy_in(&src, "", fs::CopyInOptions {
+    let (report, _) = fs.copy_in(&[&src_str], "", fs::CopyInOptions {
         checksum: true,
         ..Default::default()
     })
@@ -995,9 +1053,10 @@ fn sync_in_with_dest_prefix() {
 
     let store = common::create_store(dir.path(), "main");
     let fs = store.branches().get("main").unwrap();
+    let src_str = dir_src(&src);
 
     // Initial sync into a prefix
-    fs.sync_in(&src, "data", Default::default()).unwrap();
+    fs.sync_in(&src_str, "data", Default::default()).unwrap();
     let fs = store.branches().get("main").unwrap();
     assert_eq!(fs.read_text("data/file1.txt").unwrap(), "one");
 
@@ -1005,7 +1064,7 @@ fn sync_in_with_dest_prefix() {
     std::fs::write(src.join("new.txt"), b"new").unwrap();
     std::fs::remove_file(src.join("file2.txt")).unwrap();
 
-    let (report, _) = fs.sync_in(&src, "data", Default::default()).unwrap();
+    let (report, _) = fs.sync_in(&src_str, "data", Default::default()).unwrap();
     assert!(report.add.iter().any(|f| f.path == "data/new.txt"));
     assert!(report.delete.iter().any(|f| f.path == "data/file2.txt"));
 

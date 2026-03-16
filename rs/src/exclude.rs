@@ -61,6 +61,12 @@ struct Pattern {
 #[derive(Debug, Clone, Default)]
 pub struct ExcludeFilter {
     patterns: Vec<Pattern>,
+    /// When `true`, `.gitignore` files found during directory walks are loaded
+    /// and their rules applied.
+    pub gitignore: bool,
+    /// Per-directory `.gitignore` patterns, keyed by relative directory path.
+    /// Empty string key = root directory.
+    gitignore_filters: std::collections::HashMap<String, Vec<Pattern>>,
 }
 
 impl ExcludeFilter {
@@ -192,12 +198,131 @@ impl ExcludeFilter {
         excluded
     }
 
-    /// Return `true` if at least one pattern has been loaded.
+    /// Return `true` if at least one pattern has been loaded or gitignore
+    /// mode is enabled.
     ///
-    /// A filter with no patterns never excludes anything; callers may use this
-    /// to skip the filtering step entirely when no patterns are active.
+    /// A filter with no patterns and gitignore disabled never excludes
+    /// anything; callers may use this to skip the filtering step entirely
+    /// when no patterns are active.
     pub fn active(&self) -> bool {
-        !self.patterns.is_empty()
+        !self.patterns.is_empty() || self.gitignore
+    }
+
+    /// Load `.gitignore` from `abs_dir` if gitignore mode is enabled.
+    ///
+    /// `rel_dir` is the relative directory path (empty string for root).
+    /// Patterns from the `.gitignore` file are stored and used by
+    /// [`is_excluded_in_walk`](Self::is_excluded_in_walk).
+    pub fn enter_directory(&mut self, abs_dir: &Path, rel_dir: &str) {
+        if !self.gitignore {
+            return;
+        }
+        if self.gitignore_filters.contains_key(rel_dir) {
+            return;
+        }
+        let gi = abs_dir.join(".gitignore");
+        if gi.is_file() {
+            if let Ok(contents) = fs::read_to_string(&gi) {
+                let mut patterns = Vec::new();
+                for line in contents.lines() {
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    let (negated, after_neg) = if trimmed.starts_with('!') {
+                        (true, &trimmed[1..])
+                    } else {
+                        (false, trimmed)
+                    };
+                    let (dir_only, pat) = if after_neg.ends_with('/') {
+                        (true, &after_neg[..after_neg.len() - 1])
+                    } else {
+                        (false, after_neg)
+                    };
+                    if pat.is_empty() {
+                        continue;
+                    }
+                    patterns.push(Pattern {
+                        raw: pat.to_string(),
+                        negated,
+                        dir_only,
+                    });
+                }
+                self.gitignore_filters.insert(rel_dir.to_string(), patterns);
+            } else {
+                self.gitignore_filters.insert(rel_dir.to_string(), Vec::new());
+            }
+        } else {
+            self.gitignore_filters.insert(rel_dir.to_string(), Vec::new());
+        }
+    }
+
+    /// Check base patterns + loaded `.gitignore` hierarchy during a walk.
+    ///
+    /// Called during directory walking after [`enter_directory`](Self::enter_directory)
+    /// has been invoked for every ancestor directory.
+    pub fn is_excluded_in_walk(&self, rel_path: &str, is_dir: bool) -> bool {
+        // Check base patterns first
+        let check = if is_dir {
+            format!("{}/", rel_path)
+        } else {
+            rel_path.to_string()
+        };
+        let _ = &check; // suppress unused warning
+
+        // Base patterns (--exclude / --exclude-from)
+        {
+            let mut excluded = false;
+            for p in &self.patterns {
+                if p.dir_only && !is_dir {
+                    continue;
+                }
+                if match_pattern(&p.raw, rel_path) {
+                    excluded = !p.negated;
+                }
+            }
+            if excluded {
+                return true;
+            }
+        }
+
+        if !self.gitignore {
+            return false;
+        }
+
+        // Auto-exclude .gitignore files themselves
+        if !is_dir {
+            let basename = rel_path.rsplit('/').next().unwrap_or(rel_path);
+            if basename == ".gitignore" {
+                return true;
+            }
+        }
+
+        // Walk .gitignore filters from root to deepest ancestor.
+        // Git semantics: last (deepest) matching rule wins.
+        let parts: Vec<&str> = rel_path.split('/').collect();
+        let mut excluded: Option<bool> = None;
+        for depth in 0..parts.len() {
+            let dir_key = if depth == 0 {
+                String::new()
+            } else {
+                parts[..depth].join("/")
+            };
+            if let Some(dir_patterns) = self.gitignore_filters.get(&dir_key) {
+                // Path relative to this .gitignore's directory
+                let sub = parts[depth..].join("/");
+                for p in dir_patterns {
+                    if p.dir_only && !is_dir {
+                        continue;
+                    }
+                    if match_pattern(&p.raw, &sub) {
+                        excluded = Some(!p.negated);
+                    }
+                }
+            }
+        }
+
+        excluded.unwrap_or(false)
     }
 }
 

@@ -916,6 +916,7 @@ class FS:
             mode: Override file mode for all files.
             ignore_existing: Skip files that already exist at dest.
             delete: Remove repo files under *dest* not in source.
+                Excluded files (via *exclude*) are preserved (rsync behavior).
             ignore_errors: Collect errors instead of aborting.
             checksum: Compare by content hash (default ``True``).
             exclude: Gitignore-style exclude filter.

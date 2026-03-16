@@ -143,19 +143,24 @@ impl GitStore {
         if let Ok(fs) = self.tags().get(ref_str) {
             return Ok(fs);
         }
-        // Fall back to commit hash
-        let oid = git2::Oid::from_str(ref_str)
-            .map_err(|_| Error::not_found(format!("ref not found: '{}'", ref_str)))?;
-        {
+        // Fall back to commit hash (full or short/prefix)
+        let is_hex = !ref_str.is_empty()
+            && ref_str.len() >= 4
+            && ref_str.chars().all(|c| c.is_ascii_hexdigit());
+        if !is_hex {
+            return Err(Error::not_found(format!("ref not found: '{}'", ref_str)));
+        }
+        let oid = {
             let repo = self.inner.repo.lock()
                 .map_err(|e| Error::git_msg(e.to_string()))?;
-            // Verify it's a commit
-            let obj = repo.find_object(oid, None)
+            // Use revparse_single to handle both full and short hashes
+            let obj = repo.revparse_single(ref_str)
                 .map_err(|_| Error::not_found(format!("ref not found: '{}'", ref_str)))?;
-            if obj.kind() != Some(git2::ObjectType::Commit) {
-                return Err(Error::not_found(format!("ref not found: '{}'", ref_str)));
-            }
-        }
+            // Peel to commit if it's a tag
+            let commit = obj.peel_to_commit()
+                .map_err(|_| Error::not_found(format!("ref not found: '{}'", ref_str)))?;
+            commit.id()
+        };
         Fs::from_commit(Arc::clone(&self.inner), oid, None, Some(false))
     }
 
@@ -341,5 +346,17 @@ impl GitStore {
         rename: Option<&std::collections::HashMap<String, String>>,
     ) -> Result<()> {
         crate::mirror::bundle_import(&self.inner.path, path, refs, rename)
+    }
+
+    /// Create an empty branch with an empty tree and no parent commit.
+    ///
+    /// This is equivalent to what `init` does for the initial branch,
+    /// but can be called at any time to create a new root branch.
+    ///
+    /// # Errors
+    /// Returns an error if the git operations fail.
+    pub fn create_empty_branch(&self, name: &str) -> Result<()> {
+        let repo = self.inner.repo.lock().map_err(|e| Error::git_msg(e.to_string()))?;
+        Self::init_branch(&repo, &self.inner.path, name, &self.inner.signature)
     }
 }

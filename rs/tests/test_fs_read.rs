@@ -327,7 +327,7 @@ fn copy_out_root_basic() {
     let (_, fs) = common::store_with_files(dir.path());
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
-    let report = fs.copy_out("", &dest, CopyOutOptions::default()).unwrap();
+    let report = fs.copy_out(&[""], dest.to_str().unwrap(), CopyOutOptions::default()).unwrap();
     assert!(report.total() > 0);
     assert_eq!(std::fs::read_to_string(dest.join("hello.txt")).unwrap(), "hello");
     assert_eq!(std::fs::read_to_string(dest.join("dir/a.txt")).unwrap(), "aaa");
@@ -349,7 +349,7 @@ fn copy_out_root_preserves_executable() {
 
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
-    fs.copy_out("", &dest, CopyOutOptions::default()).unwrap();
+    fs.copy_out(&[""], dest.to_str().unwrap(), CopyOutOptions::default()).unwrap();
 
     let meta = std::fs::metadata(dest.join("run.sh")).unwrap();
     assert!(meta.permissions().mode() & 0o111 != 0);
@@ -369,7 +369,7 @@ fn copy_out_root_preserves_symlinks() {
 
     let dest = dir.path().join("out");
     std::fs::create_dir(&dest).unwrap();
-    fs.copy_out("", &dest, CopyOutOptions::default()).unwrap();
+    fs.copy_out(&[""], dest.to_str().unwrap(), CopyOutOptions::default()).unwrap();
 
     let link_target = std::fs::read_link(dest.join("link")).unwrap();
     assert_eq!(link_target.to_string_lossy(), "target.txt");

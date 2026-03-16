@@ -57,7 +57,7 @@ from ._helpers import (
 @click.option("--ignore-existing", is_flag=True, default=False,
               help="Skip files that already exist at the destination.")
 @click.option("--delete", is_flag=True, default=False,
-              help="Delete destination files not present in source (like rsync --delete).")
+              help="Delete destination files not present in source (like rsync --delete). Excluded files are preserved.")
 @click.option("--exclude", multiple=True,
               help="Exclude files matching pattern (gitignore syntax, repeatable).")
 @click.option("--exclude-from", "exclude_from", type=click.Path(exists=True),

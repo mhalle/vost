@@ -9,7 +9,8 @@ for the TypeScript port.
 ```bash
 make test-py        # Python tests only
 make test-ts        # TypeScript tests only (Node.js / vitest)
-make test-rs        # Rust tests only
+make test-rs        # Rust library tests only
+make test-rs-cli    # Rust CLI tests (Python test suite against Rust binary)
 make test-deno      # Deno compatibility tests for the TS port
 make test-interop   # cross-language interop tests
 make test-all       # all of the above
@@ -18,7 +19,7 @@ make test-all       # all of the above
 ## Python tests
 
 - **Framework:** pytest
-- **Location:** `tests/test_*.py` (38 files, ~1537 tests)
+- **Location:** `tests/test_*.py` (~38 files, ~1537 tests)
 - **Run:** `uv run python -m pytest tests/ -v`
 - **Run one file:** `uv run python -m pytest tests/test_sync.py -v`
 - **Run one test:** `uv run python -m pytest tests/test_sync.py -k test_basic_sync -v`
@@ -75,6 +76,118 @@ Deno permissions required: `--allow-read --allow-write --allow-env`. The
 | Immutability | 1 | write returns new snapshot |
 | Read-only | 1 | tag write rejection |
 | FUSE-readiness | 2 | treeHash, partial reads |
+
+## Rust tests
+
+Rust has two levels of testing: library tests and CLI tests.
+
+### Library tests
+
+- **Framework:** `#[test]` / cargo test
+- **Location:** `rs/tests/test_*.rs` (~20 files, ~600 tests)
+- **Run:** `cd rs && cargo test`
+- **Run one file:** `cd rs && cargo test --test test_copy`
+- **Run one test:** `cd rs && cargo test copy_in_multi -- --nocapture`
+
+These test the Rust library API directly (`GitStore`, `Fs`, `Batch`, etc.)
+using temporary repos from the `tempfile` crate.
+
+### CLI cross-port tests
+
+The Rust CLI is tested by running the **same Python CLI test suite** against
+the Rust binary. This is controlled by the `VOST_CLI` environment variable.
+
+```bash
+# Build the Rust CLI first
+cd rs && cargo build --features cli
+
+# Run the full Python CLI test suite against the Rust binary
+VOST_CLI=rust uv run python -m pytest tests/test_cli.py tests/test_cli_refs.py \
+    tests/test_cli_ls.py tests/test_cli_cp.py tests/test_cli_archive.py \
+    tests/test_cmp_cli.py tests/test_auto_create.py tests/test_backup_restore.py \
+    tests/test_rsync_compat.py -v
+
+# Run a single test file
+VOST_CLI=rust uv run python -m pytest tests/test_cli.py -v
+
+# Run a single test
+VOST_CLI=rust uv run python -m pytest tests/test_cli.py::TestInit -v
+```
+
+Or use the Makefile target:
+
+```bash
+make test-rs-cli
+```
+
+#### How it works
+
+The mechanism is a **runner swap** controlled by `VOST_CLI=rust`:
+
+1. `tests/conftest.py` checks `os.environ.get("VOST_CLI")`.
+2. When set to `"rust"`, it imports `RustCliRunner` from `tests/rs_runner.py`
+   instead of Click's `CliRunner`. The `runner` fixture returns a
+   `RustCliRunner` instance.
+3. `RustCliRunner.invoke(main, args, input=...)` ignores the `main` argument
+   and shells out to the Rust binary at `rs/target/debug/vost` via
+   `subprocess.run`.
+4. The return value is a `RustResult` dataclass with the same interface as
+   Click's `Result` (`.exit_code`, `.output`, `.output_bytes`).
+
+Because both runners expose the same interface, **all CLI test code runs
+unmodified** against either backend. No test duplication, no conditional
+logic in the tests themselves.
+
+#### Overriding the binary path
+
+By default the runner uses `rs/target/debug/vost`. To test a different build
+(e.g. release, or a binary installed elsewhere):
+
+```bash
+VOST_CLI=rust VOST_BINARY=/path/to/vost uv run python -m pytest tests/test_cli.py
+```
+
+#### What the CLI tests cover
+
+The CLI test suite exercises every user-facing command through the same
+entry points a real user would use:
+
+| Test file | Commands tested |
+|-----------|----------------|
+| `test_cli.py` | init, destroy, gc, rm, write, log, sync, diff, undo, redo, reflog, checksum/mtime |
+| `test_cli_refs.py` | branch (list/set/delete/exists/hash/current), tag, hash, ref resolution |
+| `test_cli_ls.py` | ls (plain, recursive, long, glob, JSON/JSONL output) |
+| `test_cli_cp.py` | cp (disk→repo, repo→disk, repo→repo, dry-run, delete, exclude, symlinks, ignore-errors) |
+| `test_cli_archive.py` | zip, unzip, tar, untar, archive\_out, archive\_in |
+| `test_cmp_cli.py` | cmp (repo vs repo, repo vs disk, disk vs disk) |
+| `test_auto_create.py` | auto-creation of repos on write/cp/sync/archive\_in |
+| `test_backup_restore.py` | backup, restore (local, bundle, ref rename) |
+| `test_rsync_compat.py` | rsync-compatible --delete/--exclude behavior |
+
+#### Writing CLI tests that work with both backends
+
+Tests should:
+
+- Use the `runner` fixture (not `CliRunner()` directly).
+- Pass `main` as the first argument to `runner.invoke()` (the Rust runner
+  ignores it, but the Python runner needs it).
+- Only check `result.exit_code` and `result.output` (or `result.output_bytes`
+  for binary data). Don't rely on Click-specific attributes like
+  `result.exception`.
+- Prefer `"text" in result.output` over exact string equality, since error
+  messages may differ slightly between ports (e.g. capitalization).
+- Import `main` from `vost.cli` at the top of the file (even when running
+  in Rust mode, the import succeeds — it's just unused).
+
+```python
+from vost.cli import main  # always importable
+
+class TestExample:
+    def test_something(self, runner, initialized_repo):
+        r = runner.invoke(main, ["ls", "--repo", initialized_repo])
+        assert r.exit_code == 0
+        assert "hello.txt" in r.output
+```
 
 ## Interop tests
 

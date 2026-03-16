@@ -473,3 +473,13 @@ pub fn mode_from_disk(path: &std::path::Path) -> Result<u32> {
     }
     Ok(MODE_BLOB)
 }
+
+/// Compute the git blob object hash for raw data without a repository.
+///
+/// Returns the 40-character lowercase hex SHA-1 that git would assign
+/// to a blob containing `data`.
+pub fn hash_blob(data: &[u8]) -> Result<String> {
+    let oid = git2::Oid::hash_object(git2::ObjectType::Blob, data)
+        .map_err(Error::git)?;
+    Ok(oid.to_string())
+}

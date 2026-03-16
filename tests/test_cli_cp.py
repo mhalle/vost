@@ -965,22 +965,22 @@ class TestExcludeCLI:
         assert "--exclude" in r.output
 
     def test_cp_exclude_with_delete(self, runner, initialized_repo, tmp_path):
-        """--exclude + --delete: excluded files not copied, existing files remain."""
+        """--exclude + --delete: excluded files PRESERVED in dest (rsync behavior)."""
         src = tmp_path / "src"
         src.mkdir()
         (src / "app.py").write_text("code")
         (src / "app.pyc").write_text("compiled")
         (src / "lib.py").write_text("lib")
 
-        # First copy without exclude
+        # First copy without exclude (so app.pyc is in the repo)
         r = runner.invoke(main, [
             "cp", "--repo", initialized_repo,
             str(src) + "/", ":",
         ])
         assert r.exit_code == 0, r.output
 
-        # Now sync with exclude and delete — excluded files not in enumeration,
-        # so they're treated as "not in source" and get deleted
+        # Now cp with --exclude and --delete — rsync preserves excluded
+        # files that already exist in the destination
         r = runner.invoke(main, [
             "cp", "--repo", initialized_repo, "--delete",
             "--exclude", "*.pyc",
@@ -991,7 +991,8 @@ class TestExcludeCLI:
         r = runner.invoke(main, ["ls", "--repo", initialized_repo, "-R"])
         assert "app.py" in r.output
         assert "lib.py" in r.output
-        assert "app.pyc" not in r.output
+        # rsync --delete --exclude '*.pyc' preserves *.pyc in dest
+        assert "app.pyc" in r.output
 
     def test_sync_gitignore_dry_run(self, runner, initialized_repo, tmp_path):
         """--gitignore works with dry-run."""

@@ -1,9 +1,25 @@
 """Shared fixtures for vost tests."""
 
+import os
 import pytest
-from click.testing import CliRunner
 
-from vost.cli import main
+# ---------------------------------------------------------------------------
+# CLI backend selection: VOST_CLI=rust → Rust binary, else Python/Click
+# ---------------------------------------------------------------------------
+
+_USE_RUST = os.environ.get("VOST_CLI", "").lower() == "rust"
+
+if _USE_RUST:
+    from tests.rs_runner import RustCliRunner as _Runner
+
+    # A no-op sentinel so `runner.invoke(main, ...)` compiles — the
+    # RustCliRunner ignores this argument entirely.
+    def main(*_a, **_kw):
+        raise RuntimeError("main() should not be called in Rust mode")
+else:
+    from click.testing import CliRunner as _Runner
+    from vost.cli import main  # noqa: F811 — re-exported for test modules
+
 from vost.repo import init_repository
 
 
@@ -15,12 +31,12 @@ def bare_repo(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# CLI fixtures (moved from test_cli.py)
+# CLI fixtures
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
 def runner():
-    return CliRunner(env={"VOST_REPO": ""})
+    return _Runner(env={"VOST_REPO": ""})
 
 
 @pytest.fixture
@@ -97,4 +113,3 @@ def repo_with_tree(tmp_path, runner):
     assert r.exit_code == 0, r.output
 
     return p
-

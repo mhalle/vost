@@ -32,6 +32,8 @@
 //! ```
 
 pub mod batch;
+#[cfg(feature = "cli")]
+pub mod cli;
 pub mod copy;
 pub mod error;
 pub mod exclude;
@@ -57,6 +59,7 @@ pub use refdict::RefDict;
 pub use notes::{NoteDict, NoteNamespace, NotesBatch};
 pub use fileobj::{FsWriter, BatchWriter};
 pub use types::*;
-pub use copy::disk_glob;
+pub use copy::{disk_glob, disk_glob_ext};
 pub use exclude::ExcludeFilter;
 pub use mirror::resolve_credentials;
+pub use tree::hash_blob;

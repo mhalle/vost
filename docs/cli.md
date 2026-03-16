@@ -165,7 +165,7 @@ vost cp --ref v1.0 :data ./local          # from tag/branch/hash
 | `--follow-symlinks` | Dereference symlinks (disk→repo only). |
 | `-n`, `--dry-run` | Preview without writing. |
 | `--ignore-existing` | Skip existing destination files. |
-| `--delete` | Delete dest files not in source (rsync `--delete`). |
+| `--delete` | Delete dest files not in source (rsync `--delete`). Excluded files are preserved — see [Exclude patterns](#exclude-patterns). |
 | `--no-glob` | Treat source paths as literal (no `*` or `?` expansion). |
 | `--exclude PATTERN` | Exclude files matching pattern (gitignore syntax, repeatable; disk→repo only; see [Exclude patterns](#exclude-patterns)). |
 | `--exclude-from FILE` | Read exclude patterns from file (disk→repo only; see [Exclude patterns](#exclude-patterns)). |
@@ -861,6 +861,20 @@ The `--exclude` and `--exclude-from` options use gitignore syntax:
 | `__pycache__/` | `__pycache__` directories and all their contents |
 
 Multiple `--exclude` flags combine. `--exclude-from` reads one pattern per line (blank lines and `#` comments are skipped).
+
+**`--delete` + `--exclude` interaction (rsync behavior):**
+When `--delete` and `--exclude` are combined, excluded files in the destination are **preserved** — they are not deleted. This matches rsync's behavior: excluded files are invisible to the operation in both source and destination.
+
+```bash
+# Example: sync code but leave .pyc files untouched in the repo
+vost cp --delete --exclude '*.pyc' ./src/ :code
+
+# Result: new/changed .py files are synced,
+#         .py files removed from disk are deleted from repo,
+#         .pyc files in the repo are left as-is.
+```
+
+The same rule applies to `sync --exclude` and `--gitignore`: files excluded by gitignore patterns are preserved in the destination when deletions occur.
 
 The `--gitignore` flag (sync only) automatically reads `.gitignore` files from the source directory tree. Each `.gitignore` applies to files in its own directory and below. When active, `.gitignore` files themselves are excluded from the repo.
 

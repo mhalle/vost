@@ -224,6 +224,11 @@ def _copy_in(
 
         add_rels = sorted(local_rels - repo_rels)
         delete_rels = sorted(repo_rels - local_rels)
+        # rsync behavior: when --exclude is combined with --delete,
+        # excluded files in the destination are PRESERVED (not deleted).
+        if exclude is not None and exclude.active:
+            delete_rels = [r for r in delete_rels
+                           if not exclude.is_excluded(r)]
         both = sorted(local_rels & repo_rels)
 
         if not checksum:
@@ -373,6 +378,11 @@ def _copy_in_dry(
 
         add = sorted(local_rels - repo_rels)
         delete_list = sorted(repo_rels - local_rels)
+        # rsync behavior: when --exclude is combined with --delete,
+        # excluded files in the destination are PRESERVED (not deleted).
+        if exclude is not None and exclude.active:
+            delete_list = [r for r in delete_list
+                           if not exclude.is_excluded(r)]
         both = sorted(local_rels & repo_rels)
 
         if not checksum:

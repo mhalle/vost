@@ -81,6 +81,10 @@ pub struct CopyInOptions {
     pub dry_run: bool,
     /// Compare by content hash to skip unchanged files (default `true`).
     pub checksum: bool,
+    /// Follow symlinks instead of recording them as symlink entries.
+    /// When `true`, symlinks are dereferenced and the target content is
+    /// stored. When `false` (default), symlinks are preserved.
+    pub follow_symlinks: bool,
     /// Advisory extra parent commits (e.g. merge parents). These are appended
     /// after the branch tip (first parent) without any tree merging.
     pub parents: Vec<Fs>,
@@ -95,6 +99,7 @@ impl Default for CopyInOptions {
             message: None,
             dry_run: false,
             checksum: true,
+            follow_symlinks: false,
             parents: Vec::new(),
         }
     }
@@ -125,6 +130,8 @@ pub struct SyncOptions {
     pub dry_run: bool,
     /// Compare by content hash to skip unchanged files (default `true`).
     pub checksum: bool,
+    /// Skip files that fail and continue.
+    pub ignore_errors: bool,
     /// Advisory extra parent commits (e.g. merge parents). These are appended
     /// after the branch tip (first parent) without any tree merging.
     pub parents: Vec<Fs>,
@@ -138,6 +145,7 @@ impl Default for SyncOptions {
             exclude_filter: None,
             message: None,
             dry_run: false,
+            ignore_errors: false,
             checksum: true,
             parents: Vec::new(),
         }
@@ -185,6 +193,7 @@ pub struct MoveOptions {
 #[derive(Debug, Clone, Default)]
 pub struct CopyFromRefOptions {
     /// Remove dest files under the target that are not in the source.
+    /// Excluded files (via `ExcludeFilter`) are preserved (rsync behavior).
     pub delete: bool,
     /// Preview only; when `true` the store is not modified but the returned
     /// `Fs` has its `changes` field set.
@@ -725,17 +734,19 @@ impl Fs {
     /// Copy local files from disk into the repo.
     pub fn copy_in(
         &self,
-        src: &Path,
+        sources: &[&str],
         dest: &str,
         opts: CopyInOptions,
     ) -> Result<(ChangeReport, Fs)> {
         let tree_oid = self.require_tree()?;
         let checksum = opts.checksum;
+        let follow_symlinks = opts.follow_symlinks;
         let exclude_filter = opts.exclude_filter;
+        let commit_time = if !checksum { self.time().ok() } else { None };
         let (writes, report) = self.with_repo(|repo| {
             let inc: Option<Vec<&str>> = opts.include.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
             let exc: Option<Vec<&str>> = opts.exclude.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-            crate::copy::copy_in(repo, tree_oid, src, dest, inc.as_deref(), exc.as_deref(), checksum)
+            crate::copy::copy_in_multi(repo, tree_oid, sources, dest, inc.as_deref(), exc.as_deref(), checksum, commit_time, follow_symlinks)
         })?;
         let writes: Vec<_> = if let Some(ref ef) = exclude_filter {
             if ef.active() {
@@ -766,36 +777,39 @@ impl Fs {
     /// Copy repo files to local disk.
     pub fn copy_out(
         &self,
-        src: &str,
-        dest: &Path,
+        sources: &[&str],
+        dest: &str,
         opts: CopyOutOptions,
     ) -> Result<ChangeReport> {
         let tree_oid = self.require_tree()?;
+        let commit_time = self.time().ok();
         self.with_repo(|repo| {
             let inc: Option<Vec<&str>> = opts.include.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
             let exc: Option<Vec<&str>> = opts.exclude.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-            crate::copy::copy_out(repo, tree_oid, src, dest, inc.as_deref(), exc.as_deref())
+            crate::copy::copy_out_multi(repo, tree_oid, sources, dest, inc.as_deref(), exc.as_deref(), commit_time)
         })
     }
 
     /// Make `dest` in the repo identical to the local `src` directory.
     pub fn sync_in(
         &self,
-        src: &Path,
+        src: &str,
         dest: &str,
         opts: SyncOptions,
     ) -> Result<(ChangeReport, Fs)> {
         let tree_oid = self.require_tree()?;
         let checksum = opts.checksum;
-        let exclude_filter = opts.exclude_filter;
+        let mut exclude_filter = opts.exclude_filter;
+        let commit_time = if !checksum { self.time().ok() } else { None };
+        let src_path = Path::new(src);
         let (writes, report) = self.with_repo(|repo| {
             let inc: Option<Vec<&str>> = opts.include.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
             let exc: Option<Vec<&str>> = opts.exclude.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-            crate::copy::sync_in(repo, tree_oid, src, dest, inc.as_deref(), exc.as_deref(), checksum)
+            crate::copy::sync_in(repo, tree_oid, src_path, dest, inc.as_deref(), exc.as_deref(), checksum, commit_time, &mut exclude_filter, opts.ignore_errors)
         })?;
         let writes: Vec<_> = if let Some(ref ef) = exclude_filter {
             if ef.active() {
-                writes.into_iter().filter(|(p, _)| !ef.is_excluded(p, false)).collect()
+                writes.into_iter().filter(|(p, tw)| tw.is_none() || !ef.is_excluded(p, false)).collect()
             } else {
                 writes
             }
@@ -819,15 +833,17 @@ impl Fs {
     pub fn sync_out(
         &self,
         src: &str,
-        dest: &Path,
+        dest: &str,
         opts: SyncOptions,
     ) -> Result<ChangeReport> {
         let tree_oid = self.require_tree()?;
         let checksum = opts.checksum;
+        let commit_time = self.time().ok();
+        let dest_path = Path::new(dest);
         self.with_repo(|repo| {
             let inc: Option<Vec<&str>> = opts.include.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
             let exc: Option<Vec<&str>> = opts.exclude.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-            crate::copy::sync_out(repo, tree_oid, src, dest, inc.as_deref(), exc.as_deref(), checksum)
+            crate::copy::sync_out(repo, tree_oid, src, dest_path, inc.as_deref(), exc.as_deref(), checksum, commit_time)
         })
     }
 
@@ -1204,6 +1220,26 @@ impl Fs {
             Fs::from_commit(Arc::clone(&self.inner), parent_id, self.ref_name.clone(), Some(self.writable))
         })
         .transpose()
+    }
+
+    /// Return an `Fs` for the given commit hash, inheriting this snapshot's
+    /// ref name and writability.
+    ///
+    /// This is useful for navigating to a specific commit (e.g. from a log
+    /// entry) while preserving the branch context.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidHash`] if the hash is not valid hex, or
+    /// [`Error::NotFound`] if the commit does not exist.
+    pub fn at_commit(&self, hash: &str) -> Result<Fs> {
+        let oid = git2::Oid::from_str(hash)
+            .map_err(|_| Error::invalid_hash(hash))?;
+        Fs::from_commit(
+            Arc::clone(&self.inner),
+            oid,
+            self.ref_name.clone(),
+            Some(self.writable),
+        )
     }
 
     /// Return the `Fs` at the *n*-th ancestor commit.

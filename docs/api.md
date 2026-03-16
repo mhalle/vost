@@ -42,6 +42,8 @@ vost has four ways to move data. They differ in **what** they transfer and **how
 
 **copy** and **sync** work with individual files between disk and repo (or within the repo). The difference is that copy is additive by default — it only adds or updates files — while sync makes the destination an exact replica of the source, deleting anything extra.
 
+When `--exclude` patterns are used with either copy `--delete` or sync, excluded files in the destination are **preserved** (not deleted). This matches rsync's semantics: excluded files are invisible to the operation in both source and destination.
+
 **archive** serializes one snapshot (branch, tag, or historical commit) into a single archive file, or imports one back. No git history is preserved — just the file tree at that point in time.
 
 **backup** and **restore** operate at the git level. They push or fetch all refs (branches, tags) and their full commit history to another git repository. This is for disaster recovery and replication, not for working with individual files.
