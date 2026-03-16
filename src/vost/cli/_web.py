@@ -115,8 +115,12 @@ def _base_path_middleware(app, prefix):
 # WSGI app
 # ---------------------------------------------------------------------------
 
+_DEFAULT_MAX_FILE_SIZE = 250 * 1024 * 1024  # 250 MB
+
+
 def _make_app(store, *, fs=None, resolver=None, ref_label=None,
-              cors=False, no_cache=False, base_path=""):
+              cors=False, no_cache=False, base_path="",
+              max_file_size=_DEFAULT_MAX_FILE_SIZE):
     """Return a WSGI application serving *store* contents over HTTP.
 
     Single-ref mode (one snapshot per request):
@@ -146,7 +150,8 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
             # --- Single-ref mode ---
             current_fs = _get_fs()
             return _serve_path(environ, start_response, current_fs,
-                               ref_label or "", base_path, path, want_json)
+                               ref_label or "", base_path, path, want_json,
+                               max_file_size)
         else:
             # --- Multi-ref mode ---
             if not path:
@@ -164,7 +169,8 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
 
             resolved = _resolve_fs_for_ref(store, ref_name)
             return _serve_path(environ, start_response, resolved, ref_name,
-                               f"{base_path}/{ref_name}", rest, want_json)
+                               f"{base_path}/{ref_name}", rest, want_json,
+                               max_file_size)
 
     result = app
     if base_path:
@@ -215,7 +221,8 @@ def _serve_ref_listing(start_response, store, base_path, want_json):
     return [body]
 
 
-def _serve_path(environ, start_response, fs, ref_label, link_prefix, path, want_json):
+def _serve_path(environ, start_response, fs, ref_label, link_prefix, path, want_json,
+                max_file_size=_DEFAULT_MAX_FILE_SIZE):
     """Serve a file or directory listing within a resolved FS."""
     etag = f'"{fs.commit_hash}"'
 
@@ -234,11 +241,33 @@ def _serve_path(environ, start_response, fs, ref_label, link_prefix, path, want_
     if fs.is_dir(path):
         return _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag)
 
-    return _serve_file(start_response, fs, ref_label, path, want_json, etag)
+    return _serve_file(start_response, fs, ref_label, path, want_json, etag,
+                       max_file_size)
 
 
-def _serve_file(start_response, fs, ref_label, path, want_json, etag):
+def _send_413(start_response, path, size, limit):
+    """Send a 413 Payload Too Large response."""
+    msg = f"File too large: {path} ({size} bytes, limit {limit} bytes)"
+    body = msg.encode()
+    start_response("413 Payload Too Large", [
+        ("Content-Type", "text/plain"),
+        ("Content-Length", str(len(body))),
+    ])
+    return [body]
+
+
+def _serve_file(start_response, fs, ref_label, path, want_json, etag,
+                max_file_size=_DEFAULT_MAX_FILE_SIZE):
     """Serve file contents or JSON metadata."""
+    # Check size before reading
+    if max_file_size > 0:
+        try:
+            file_size = fs.size(path)
+            if file_size > max_file_size:
+                return _send_413(start_response, path, file_size, max_file_size)
+        except Exception:
+            pass  # fall through to read
+
     data = fs.read(path)
 
     if want_json:
@@ -337,9 +366,11 @@ def _send_404(start_response, message="Not found"):
               help="Open the URL in the default browser on start.")
 @click.option("--quiet", "-q", is_flag=True, default=False,
               help="Suppress per-request log output.")
+@click.option("--max-file-size", "max_file_size_mb", type=int, default=250,
+              help="Maximum file size to serve in MB (default: 250, 0 = unlimited).")
 @click.pass_context
 def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
-          all_refs, cors, no_cache, base_path, open_browser, quiet):
+          all_refs, cors, no_cache, base_path, open_browser, quiet, max_file_size_mb):
     """Serve repository files over HTTP.
 
     By default, serves the current branch at /<path>.  Use --ref, --back,
@@ -363,12 +394,15 @@ def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
     if base_path:
         base_path = "/" + base_path.strip("/")
 
+    max_file_size = max_file_size_mb * 1024 * 1024 if max_file_size_mb > 0 else 0
+
     if all_refs:
         if ref or at_path or match_pattern or before or back:
             raise click.ClickException(
                 "--all cannot be combined with --ref, --path, --match, --before, or --back"
             )
-        app = _make_app(store, cors=cors, no_cache=no_cache, base_path=base_path)
+        app = _make_app(store, cors=cors, no_cache=no_cache, base_path=base_path,
+                        max_file_size=max_file_size)
         mode = "multi-ref"
     else:
         branch = branch or _current_branch(store)
@@ -380,7 +414,8 @@ def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
                                before=before, back=back)
 
         app = _make_app(store, resolver=_resolve, ref_label=ref_label,
-                        cors=cors, no_cache=no_cache, base_path=base_path)
+                        cors=cors, no_cache=no_cache, base_path=base_path,
+                        max_file_size=max_file_size)
         mode = f"branch {branch} (live)"
         if back:
             mode += f" ~{back}"

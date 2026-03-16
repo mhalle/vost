@@ -14,7 +14,7 @@ test-rs-cli:
 	VOST_CLI=rust uv run python -m pytest tests/test_cli.py tests/test_cli_refs.py \
 		tests/test_cli_ls.py tests/test_cli_cp.py tests/test_cli_archive.py \
 		tests/test_cmp_cli.py tests/test_auto_create.py tests/test_backup_restore.py \
-		tests/test_rsync_compat.py -v
+		tests/test_rsync_compat.py tests/test_cli_web.py -v
 
 test-deno:
 	cd ts && npm run build && npm run test:deno

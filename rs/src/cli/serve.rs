@@ -37,6 +37,9 @@ pub struct ServeArgs {
     /// Suppress per-request log output.
     #[arg(short, long)]
     pub quiet: bool,
+    /// Maximum file size to serve in MB (default: 250, 0 = unlimited).
+    #[arg(long, default_value_t = 250)]
+    pub max_file_size: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +193,21 @@ fn serve_file(
     cors: bool,
     no_cache: bool,
     ref_label: &str,
+    max_file_size: u64,
 ) {
+    // Check size before reading
+    if max_file_size > 0 {
+        if let Ok(file_size) = fs.size(path) {
+            if file_size > max_file_size {
+                let msg = format!(
+                    "File too large: {} ({} bytes, limit {} bytes)",
+                    path, file_size, max_file_size
+                );
+                return respond(request, 413, "text/plain", msg.as_bytes(), &[]);
+            }
+        }
+    }
+
     let data = match fs.read(path) {
         Ok(d) => d,
         Err(_) => return respond_404(request, &format!("Not found: {}", path)),
@@ -351,6 +368,7 @@ fn serve_path(
     path: &str,
     cors: bool,
     no_cache: bool,
+    max_file_size: u64,
 ) {
     let etag = format!(
         "\"{}\"",
@@ -392,7 +410,7 @@ fn serve_path(
             request, fs, ref_label, link_prefix, path, &etag, want_json, cors, no_cache,
         )
     } else {
-        serve_file(request, fs, path, &etag, want_json, cors, no_cache, ref_label)
+        serve_file(request, fs, path, &etag, want_json, cors, no_cache, ref_label, max_file_size)
     }
 }
 
@@ -443,6 +461,12 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
             .unwrap_or_else(|| branch.clone());
         mode_label = format!("branch {} (live)", branch);
     }
+
+    let max_file_bytes = if args.max_file_size > 0 {
+        args.max_file_size * 1024 * 1024
+    } else {
+        0
+    };
 
     let addr = format!("{}:{}", args.host, args.port);
     let server = tiny_http::Server::http(&addr)
@@ -540,7 +564,7 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
             };
 
             let link_pfx = format!("{}/{}", base_path, ref_name);
-            serve_path(request, &fs, ref_name, &link_pfx, rest, args.cors, args.no_cache);
+            serve_path(request, &fs, ref_name, &link_pfx, rest, args.cors, args.no_cache, max_file_bytes);
         } else {
             // Single-ref mode: resolve fresh FS each request (live)
             let fs = match resolve_fs(&store, &branch, &args.snap) {
@@ -559,6 +583,7 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
                 &path,
                 args.cors,
                 args.no_cache,
+                max_file_bytes,
             );
         }
     }

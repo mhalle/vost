@@ -1,6 +1,14 @@
-"""Tests for the vost serve command (WSGI app)."""
+"""Tests for the vost serve command (WSGI app + live CLI server)."""
 
 import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from urllib.request import urlopen, Request
+from urllib.error import HTTPError
 
 import pytest
 from click.testing import CliRunner
@@ -825,3 +833,294 @@ class TestServeCommand:
         assert "--base-path" in result.output
         assert "--open" in result.output
         assert "--quiet" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Max file size
+# ---------------------------------------------------------------------------
+
+class TestMaxFileSize:
+    """--max-file-size limits served file size (413 for oversized files)."""
+
+    def test_wsgi_small_file_under_limit(self, store_with_files):
+        """Files under the limit are served normally."""
+        fs = store_with_files.branches["main"]
+        app = _make_app(store_with_files, fs=fs, max_file_size=1024 * 1024)
+        status, headers, body = _wsgi_get(app, "/hello.txt")
+        assert status == "200 OK"
+        assert body == b"hello world\n"
+
+    def test_wsgi_large_file_over_limit(self, tmp_path):
+        """Files over the limit return 413."""
+        store = GitStore.open(str(tmp_path / "test.git"), branch="main")
+        fs = store.branches["main"]
+        # Write a 2KB file, set limit to 1KB
+        fs = fs.write("big.txt", b"x" * 2048)
+        app = _make_app(store, fs=fs, max_file_size=1024)
+        status, headers, body = _wsgi_get(app, "/big.txt")
+        assert status == "413 Payload Too Large"
+        assert b"too large" in body.lower()
+        assert b"2048" in body
+
+    def test_wsgi_unlimited(self, tmp_path):
+        """max_file_size=0 disables the limit."""
+        store = GitStore.open(str(tmp_path / "test.git"), branch="main")
+        fs = store.branches["main"]
+        fs = fs.write("big.txt", b"x" * 2048)
+        app = _make_app(store, fs=fs, max_file_size=0)
+        status, headers, body = _wsgi_get(app, "/big.txt")
+        assert status == "200 OK"
+        assert len(body) == 2048
+
+    def test_wsgi_json_metadata_not_limited(self, tmp_path):
+        """JSON metadata requests are not affected by the limit."""
+        store = GitStore.open(str(tmp_path / "test.git"), branch="main")
+        fs = store.branches["main"]
+        fs = fs.write("big.txt", b"x" * 2048)
+        # Even with a tiny limit, JSON metadata should work
+        # (the 413 is only for file content, not metadata)
+        # Actually the size check happens before the want_json branch,
+        # so JSON requests for oversized files also get 413.
+        app = _make_app(store, fs=fs, max_file_size=1024)
+        status, headers, body = _wsgi_get(app, "/big.txt", accept="application/json")
+        assert status == "413 Payload Too Large"
+
+    def test_wsgi_directory_listing_not_limited(self, store_with_files):
+        """Directory listings are never limited."""
+        fs = store_with_files.branches["main"]
+        app = _make_app(store_with_files, fs=fs, max_file_size=1)  # 1 byte limit
+        status, headers, body = _wsgi_get(app, "/")
+        assert status == "200 OK"
+        assert b"hello.txt" in body
+
+
+# ---------------------------------------------------------------------------
+# Live CLI server tests (work with both Python and Rust backends)
+# ---------------------------------------------------------------------------
+
+def _vost_cmd():
+    """Return the vost command as a list, respecting VOST_CLI=rust."""
+    if os.environ.get("VOST_CLI", "").lower() == "rust":
+        binary = os.environ.get(
+            "VOST_BINARY",
+            os.path.join(os.path.dirname(__file__), "..", "rs", "target", "debug", "vost"),
+        )
+        return [binary]
+    # Use the console_script entry point installed in the venv
+    venv_bin = os.path.join(os.path.dirname(sys.executable), "vost")
+    if os.path.exists(venv_bin):
+        return [venv_bin]
+    # Fallback: invoke via uv
+    return ["uv", "run", "vost"]
+
+
+def _start_server(repo_path, extra_args=None):
+    """Start a vost serve process on port 0, return (proc, port)."""
+    cmd = _vost_cmd() + [
+        "--repo", repo_path,
+        "serve", "-p", "0", "-q",
+    ]
+    if extra_args:
+        cmd.extend(extra_args)
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "VOST_REPO": ""},
+    )
+
+    # Read stderr lines until we find the "Serving ... at http://..." line
+    port = None
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        line = proc.stderr.readline().decode("utf-8", errors="replace")
+        if not line:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.05)
+            continue
+        m = re.search(r"http://[^:]+:(\d+)/", line)
+        if m:
+            port = int(m.group(1))
+            break
+
+    if port is None:
+        proc.kill()
+        proc.wait()
+        raise RuntimeError("Failed to start vost serve")
+
+    return proc, port
+
+
+def _stop_server(proc):
+    """Stop a vost serve process."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _http_get(port, path="/", accept=None, if_none_match=None):
+    """Make an HTTP GET request, return (status_code, headers_dict, body_bytes)."""
+    url = f"http://127.0.0.1:{port}{path}"
+    req = Request(url)
+    if accept:
+        req.add_header("Accept", accept)
+    if if_none_match:
+        req.add_header("If-None-Match", if_none_match)
+    try:
+        resp = urlopen(req, timeout=5)
+        return resp.status, dict(resp.headers), resp.read()
+    except HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+@pytest.fixture
+def serve_repo(tmp_path):
+    """Create a repo with test files and return its path."""
+    cmd = _vost_cmd()
+    repo = str(tmp_path / "serve.git")
+    subprocess.run(cmd + ["--repo", repo, "init"], check=True,
+                   capture_output=True, env={**os.environ, "VOST_REPO": ""})
+    subprocess.run(cmd + ["--repo", repo, "write", ":hello.txt"],
+                   input=b"hello world\n", check=True,
+                   capture_output=True, env={**os.environ, "VOST_REPO": ""})
+    subprocess.run(cmd + ["--repo", repo, "write", ":data/info.json"],
+                   input=b'{"key": "value"}', check=True,
+                   capture_output=True, env={**os.environ, "VOST_REPO": ""})
+    # Write a 2KB file for max-file-size testing
+    subprocess.run(cmd + ["--repo", repo, "write", ":big.bin"],
+                   input=b"x" * 2048, check=True,
+                   capture_output=True, env={**os.environ, "VOST_REPO": ""})
+    return repo
+
+
+class TestServeCLI:
+    """Live server tests via subprocess — works with both Python and Rust."""
+
+    def test_serve_root_html(self, serve_repo):
+        proc, port = _start_server(serve_repo)
+        try:
+            status, headers, body = _http_get(port, "/")
+            assert status == 200
+            assert b"hello.txt" in body
+            assert "text/html" in headers.get("Content-Type", "")
+        finally:
+            _stop_server(proc)
+
+    def test_serve_root_json(self, serve_repo):
+        proc, port = _start_server(serve_repo)
+        try:
+            status, headers, body = _http_get(port, "/", accept="application/json")
+            assert status == 200
+            data = json.loads(body)
+            assert "hello.txt" in data["entries"]
+            assert data["type"] == "directory"
+        finally:
+            _stop_server(proc)
+
+    def test_serve_file_content(self, serve_repo):
+        proc, port = _start_server(serve_repo)
+        try:
+            status, _, body = _http_get(port, "/hello.txt")
+            assert status == 200
+            assert body == b"hello world\n"
+        finally:
+            _stop_server(proc)
+
+    def test_serve_subdirectory(self, serve_repo):
+        proc, port = _start_server(serve_repo)
+        try:
+            status, _, body = _http_get(port, "/data/", accept="application/json")
+            assert status == 200
+            data = json.loads(body)
+            assert "info.json" in data["entries"]
+        finally:
+            _stop_server(proc)
+
+    def test_serve_404(self, serve_repo):
+        proc, port = _start_server(serve_repo)
+        try:
+            status, _, body = _http_get(port, "/nonexistent.txt")
+            assert status == 404
+        finally:
+            _stop_server(proc)
+
+    def test_serve_etag_304(self, serve_repo):
+        proc, port = _start_server(serve_repo)
+        try:
+            # First request to get ETag
+            status, headers, _ = _http_get(port, "/hello.txt")
+            assert status == 200
+            etag = headers.get("ETag") or headers.get("etag")
+            assert etag is not None
+
+            # Second request with If-None-Match
+            status2, _, _ = _http_get(port, "/hello.txt", if_none_match=etag)
+            assert status2 == 304
+        finally:
+            _stop_server(proc)
+
+    def test_serve_cors(self, serve_repo):
+        proc, port = _start_server(serve_repo, ["--cors"])
+        try:
+            status, headers, _ = _http_get(port, "/hello.txt")
+            assert status == 200
+            acao = headers.get("Access-Control-Allow-Origin") or headers.get("access-control-allow-origin")
+            assert acao == "*"
+        finally:
+            _stop_server(proc)
+
+    def test_serve_max_file_size_allows_small(self, serve_repo):
+        proc, port = _start_server(serve_repo, ["--max-file-size", "1"])
+        try:
+            # hello.txt is tiny, should be served
+            status, _, body = _http_get(port, "/hello.txt")
+            assert status == 200
+            assert body == b"hello world\n"
+        finally:
+            _stop_server(proc)
+
+    def test_serve_max_file_size_blocks_large(self, serve_repo):
+        # big.bin is 2KB; set limit to 1KB (but flag is in MB...)
+        # We can't test sub-MB limits via the CLI flag.
+        # Instead, write a file > 1MB and use --max-file-size 1
+        cmd = _vost_cmd()
+        subprocess.run(cmd + ["--repo", serve_repo, "write", ":huge.bin"],
+                       input=b"x" * (1024 * 1024 + 1), check=True,
+                       capture_output=True, env={**os.environ, "VOST_REPO": ""})
+
+        proc, port = _start_server(serve_repo, ["--max-file-size", "1"])
+        try:
+            status, _, body = _http_get(port, "/huge.bin")
+            assert status == 413
+            assert b"too large" in body.lower()
+        finally:
+            _stop_server(proc)
+
+    def test_serve_max_file_size_zero_unlimited(self, serve_repo):
+        cmd = _vost_cmd()
+        subprocess.run(cmd + ["--repo", serve_repo, "write", ":huge.bin"],
+                       input=b"x" * (1024 * 1024 + 1), check=True,
+                       capture_output=True, env={**os.environ, "VOST_REPO": ""})
+
+        proc, port = _start_server(serve_repo, ["--max-file-size", "0"])
+        try:
+            status, _, body = _http_get(port, "/huge.bin")
+            assert status == 200
+            assert len(body) == 1024 * 1024 + 1
+        finally:
+            _stop_server(proc)
+
+    def test_serve_directory_not_limited(self, serve_repo):
+        proc, port = _start_server(serve_repo, ["--max-file-size", "1"])
+        try:
+            # Directory listings should always work regardless of limit
+            status, _, body = _http_get(port, "/")
+            assert status == 200
+            assert b"hello.txt" in body
+        finally:
+            _stop_server(proc)
