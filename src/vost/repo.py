@@ -492,7 +492,7 @@ class GitStore:
         from .mirror import bundle_export
         bundle_export(self, path, refs=refs, squash=squash, progress=progress)
 
-    def pack(self, *, progress=None) -> int:
+    def pack(self, *, progress: Callable | None = None) -> int:
         """Pack loose objects into a packfile.
 
         Consolidates loose git objects into a single packfile for better
@@ -507,7 +507,7 @@ class GitStore:
         """
         return self._repo._drepo.object_store.pack_loose_objects(progress=progress)
 
-    def gc(self, *, progress=None) -> int:
+    def gc(self, *, progress: Callable | None = None) -> int:
         """Run garbage collection: clean up temporary files and pack loose objects.
 
         Cleans up incomplete temporary pack files, then consolidates loose
