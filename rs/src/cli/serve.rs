@@ -835,8 +835,10 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
         // Strip base path
         let raw_path = url_path.clone();
         let path = if !base_path.is_empty() {
-            if let Some(rest) = raw_path.strip_prefix(&base_path) {
-                rest.to_string()
+            if raw_path == base_path {
+                String::new()
+            } else if raw_path.starts_with(&format!("{}/", base_path)) {
+                raw_path[base_path.len()..].to_string()
             } else {
                 let info = respond_404_tracked(request, "Not found");
                 access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
@@ -849,6 +851,12 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
         let path = path.trim_matches('/').to_string();
         // Percent-decode
         let path = percent_decode(&path);
+        // Strip query string
+        let path = if let Some(idx) = path.find('?') {
+            path[..idx].to_string()
+        } else {
+            path
+        };
 
         // /_/blobs/{hash} — explicit content-addressed blob access
         if path.starts_with("_/blobs/") {
@@ -860,22 +868,6 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
             };
             access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
             continue;
-        }
-
-        // /{40-hex} — try blob hash first, fall back to normal routing
-        if is_hex40(&path) {
-            if store.has_hash(&path) {
-                let info = serve_blob(request, &store, &path, &cache_control, args.cors, args.upstream.as_deref());
-                access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
-                continue;
-            }
-            // Blob not found — redirect if upstream set
-            if let Some(ref upstream) = args.upstream {
-                let info = redirect_upstream(request, upstream, &path);
-                access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
-                continue;
-            }
-            // Fall through to normal routing
         }
 
         let info = if args.all_refs {
@@ -932,6 +924,9 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
 }
 
 fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
+    if total == 0 {
+        return None;
+    }
     let spec = header.strip_prefix("bytes=")?;
     let (start_s, end_s) = spec.split_once('-')?;
     if start_s.is_empty() {

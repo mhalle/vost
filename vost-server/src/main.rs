@@ -428,7 +428,7 @@ fn file_response(
         .header(header::ACCEPT_RANGES, "bytes");
 
     if skip_compress {
-        builder = builder.header("x-no-compress", "1");
+        builder = builder.header(header::CONTENT_ENCODING, "identity");
     }
 
     builder.body(Body::from(data)).unwrap()
@@ -458,7 +458,7 @@ fn range_response(
         );
 
     if skip_compress {
-        builder = builder.header("x-no-compress", "1");
+        builder = builder.header(header::CONTENT_ENCODING, "identity");
     }
 
     builder.body(Body::from(data)).unwrap()
@@ -633,6 +633,9 @@ fn serve_dir_listing(
 /// Parse an HTTP Range header value like "bytes=0-99" into (start, end).
 /// Returns None if the header is missing or malformed.
 fn parse_range(headers: &HeaderMap, total: u64) -> Option<(u64, u64)> {
+    if total == 0 {
+        return None;
+    }
     let range_val = headers.get(header::RANGE)?.to_str().ok()?;
     let range_val = range_val.strip_prefix("bytes=")?;
 
@@ -805,17 +808,6 @@ async fn handle_single_ref(
             None => return not_found(&format!("Ref not found: {}", ref_label)),
         };
 
-        // /{40-hex} — try blob hash first, fall back to path
-        if is_hex40(&repo_path) {
-            if state.store.has_hash(&repo_path) {
-                return serve_blob_response(&state, &repo_path, &headers);
-            }
-            // Blob not found locally — redirect to upstream if available
-            if let Some(ref upstream) = state.upstream {
-                return redirect_upstream(upstream, &repo_path);
-            }
-        }
-
         serve_path(&state, &fs, &ref_label, &state.base_path, &repo_path, &headers)
     })
     .await
@@ -895,17 +887,6 @@ async fn handle_multi_ref_root(
 ) -> Response {
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
-        // /{40-hex} — try blob hash first, fall back to ref lookup
-        if is_hex40(&ref_name) {
-            if state.store.has_hash(&ref_name) {
-                return serve_blob_response(&state, &ref_name, &headers);
-            }
-            // Blob not found locally — redirect to upstream if available
-            if let Some(ref upstream) = state.upstream {
-                return redirect_upstream(upstream, &ref_name);
-            }
-        }
-
         let fs = match state.resolve_fs(&ref_name) {
             Some(fs) => fs,
             None => return not_found(&format!("Unknown ref: {}", ref_name)),
@@ -1054,6 +1035,13 @@ async fn main() {
                 .allow_headers(Any)
                 .expose_headers(Any),
         )
+    } else {
+        app
+    };
+
+    let app = if args.compress {
+        use tower_http::compression::CompressionLayer;
+        app.layer(CompressionLayer::new().gzip(true))
     } else {
         app
     };

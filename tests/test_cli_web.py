@@ -1395,23 +1395,6 @@ class TestBlobAccess:
         assert headers["ETag"] == f'"{blob_hash}"'
         assert headers["Accept-Ranges"] == "bytes"
 
-    def test_shorthand_hash_route(self, store_with_files):
-        """/{40-hex} resolves as blob when it exists."""
-        fs = store_with_files.branches["main"]
-        blob_hash = fs.stat("hello.txt").hash
-        app = _make_app(store_with_files, fs=fs, ref_label="main")
-        status, _, body = _wsgi_get(app, f"/{blob_hash}")
-        assert status == "200 OK"
-        assert body == b"hello world\n"
-
-    def test_shorthand_falls_back_to_path(self, store_with_files):
-        """/{40-hex} that isn't a blob falls through to normal path lookup."""
-        fs = store_with_files.branches["main"]
-        app = _make_app(store_with_files, fs=fs, ref_label="main")
-        # A 40-char hex string that isn't a real blob → 404 via path lookup
-        status, _, _ = _wsgi_get(app, "/0000000000000000000000000000000000000000")
-        assert status == "404 Not Found"
-
     def test_blob_304(self, store_with_files):
         """Blob route supports ETag-based 304."""
         fs = store_with_files.branches["main"]
@@ -1464,15 +1447,6 @@ class TestBlobAccess:
         blob_hash = fs.stat("hello.txt").hash
         app = _make_app(store_with_files)  # multi-ref (no fs/resolver)
         status, _, body = _wsgi_get(app, f"/_/blobs/{blob_hash}")
-        assert status == "200 OK"
-        assert body == b"hello world\n"
-
-    def test_shorthand_multi_ref(self, store_with_files):
-        """/{40-hex} works in multi-ref mode."""
-        fs = store_with_files.branches["main"]
-        blob_hash = fs.stat("hello.txt").hash
-        app = _make_app(store_with_files)
-        status, _, body = _wsgi_get(app, f"/{blob_hash}")
         assert status == "200 OK"
         assert body == b"hello world\n"
 

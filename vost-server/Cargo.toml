@@ -14,7 +14,7 @@ vendored-openssl = ["vost/vendored-openssl"]
 [dependencies]
 vost = { path = "../rs" }
 axum = "0.8"
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "compression-gzip"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }

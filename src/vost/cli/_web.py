@@ -206,7 +206,7 @@ def _base_path_middleware(app, prefix):
 
     def wrapped(environ, start_response):
         path = environ.get("PATH_INFO", "/")
-        if not path.startswith(prefix):
+        if not (path == prefix or path.startswith(prefix + "/")):
             body = b"Not found"
             start_response("404 Not Found", [
                 ("Content-Type", "text/plain"),
@@ -265,12 +265,6 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
         if single_ref:
             # --- Single-ref mode ---
             current_fs = _get_fs()
-            # /{40-hex} — try blob hash first, fall back to path
-            if _is_hex40(path):
-                if store.has_hash(path):
-                    return _serve_blob(environ, start_response, store, path, want_json, cache_control, upstream)
-                elif upstream:
-                    return _redirect_upstream(start_response, upstream, path)
             return _serve_path(environ, start_response, current_fs,
                                ref_label or "", base_path, path, want_json,
                                max_file_size, cache_control)
@@ -279,13 +273,6 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
             if not path:
                 return _serve_ref_listing(start_response, store, base_path,
                                           want_json)
-
-            # /{40-hex} — try blob hash first (ref-independent)
-            if _is_hex40(path):
-                if store.has_hash(path):
-                    return _serve_blob(environ, start_response, store, path, want_json, cache_control, upstream)
-                elif upstream:
-                    return _redirect_upstream(start_response, upstream, path)
 
             # First segment is the ref
             parts = path.split("/", 1)
@@ -434,8 +421,8 @@ def _serve_file(environ, start_response, fs, ref_label, path, want_json,
 
     # Range request support
     range_header = environ.get("HTTP_RANGE")
-    if range_header and range_header.startswith("bytes="):
-        total = len(data)
+    total = len(data)
+    if total > 0 and range_header and range_header.startswith("bytes="):
         range_spec = range_header[6:]
         try:
             if range_spec.startswith("-"):
@@ -553,8 +540,8 @@ def _serve_blob(environ, start_response, store, hash_str, want_json, cache_contr
 
     # Range request
     range_header = environ.get("HTTP_RANGE")
-    if range_header and range_header.startswith("bytes="):
-        total = len(data)
+    total = len(data)
+    if total > 0 and range_header and range_header.startswith("bytes="):
         range_spec = range_header[6:]
         try:
             if range_spec.startswith("-"):
