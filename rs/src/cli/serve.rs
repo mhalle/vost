@@ -49,6 +49,9 @@ pub struct ServeArgs {
     /// Maximum file size to serve in MB (default: 250, 0 = unlimited).
     #[arg(long, default_value_t = 250)]
     pub max_file_size: u64,
+    /// Upstream server URL for blob redirect on cache miss.
+    #[arg(long)]
+    pub upstream: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +312,22 @@ fn respond_404_tracked(request: tiny_http::Request, message: &str) -> ResponseIn
     ResponseInfo { status: 404, size }
 }
 
+fn redirect_upstream(request: tiny_http::Request, upstream: &str, path: &str) -> ResponseInfo {
+    let location = format!("{}/{}", upstream.trim_end_matches('/'), path.trim_start_matches('/'));
+    let headers = vec![
+        tiny_http::Header::from_bytes("Location", location.as_bytes()).unwrap(),
+    ];
+    let response = tiny_http::Response::new(
+        tiny_http::StatusCode(302),
+        headers,
+        std::io::Cursor::new(Vec::new()),
+        Some(0),
+        None,
+    );
+    let _ = request.respond(response);
+    ResponseInfo { status: 302, size: 0 }
+}
+
 // ---------------------------------------------------------------------------
 // Blob hash check
 // ---------------------------------------------------------------------------
@@ -327,6 +346,7 @@ fn serve_blob(
     hash: &str,
     cache_control: &str,
     cors: bool,
+    upstream: Option<&str>,
 ) -> ResponseInfo {
     let etag = format!("\"{}\"", hash);
 
@@ -342,7 +362,12 @@ fn serve_blob(
 
     let data = match fs.read_by_hash(hash, 0, None) {
         Ok(d) => d,
-        Err(_) => return respond_404_tracked(request, &format!("Blob not found: {}", hash)),
+        Err(_) => {
+            if let Some(upstream) = upstream {
+                return redirect_upstream(request, upstream, &format!("_/blobs/{}", hash));
+            }
+            return respond_404_tracked(request, &format!("Blob not found: {}", hash));
+        }
     };
 
     // JSON mode
@@ -839,8 +864,14 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
                     resolve_fs(&store, &branch, &args.snap).ok()
                 };
                 match fs_opt {
-                    Some(fs) => serve_blob(request, &fs, hash, &cache_control, args.cors),
-                    None => respond_404_tracked(request, "No accessible ref"),
+                    Some(fs) => serve_blob(request, &fs, hash, &cache_control, args.cors, args.upstream.as_deref()),
+                    None => {
+                        if let Some(ref upstream) = args.upstream {
+                            redirect_upstream(request, upstream, &format!("_/blobs/{}", hash))
+                        } else {
+                            respond_404_tracked(request, "No accessible ref")
+                        }
+                    }
                 }
             };
             access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
@@ -858,10 +889,16 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
             };
             if let Some(ref fs) = fs_opt {
                 if fs.read_by_hash(&path, 0, Some(0)).is_ok() {
-                    let info = serve_blob(request, fs, &path, &cache_control, args.cors);
+                    let info = serve_blob(request, fs, &path, &cache_control, args.cors, args.upstream.as_deref());
                     access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
                     continue;
                 }
+            }
+            // Blob not found — redirect if upstream set
+            if let Some(ref upstream) = args.upstream {
+                let info = redirect_upstream(request, upstream, &path);
+                access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
+                continue;
             }
             // Fall through to normal routing
         }

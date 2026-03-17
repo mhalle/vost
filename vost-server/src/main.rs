@@ -108,6 +108,10 @@ struct Args {
     /// Blob cache size (number of objects). 0 to disable.
     #[arg(long, default_value_t = 4096)]
     cache_size: usize,
+    /// Upstream server URL for blob redirect on cache miss.
+    /// When a blob is not found locally, redirects to this server.
+    #[arg(long)]
+    upstream: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +181,7 @@ struct AppState {
     max_file_size: u64,
     blob_cache: BlobCache,
     no_compress_types: Vec<String>,
+    upstream: Option<String>,
 }
 
 impl AppState {
@@ -485,6 +490,15 @@ fn get_any_fs(state: &AppState) -> Option<vost::Fs> {
     branches.first().and_then(|name| state.resolve_fs(name))
 }
 
+fn redirect_upstream(upstream: &str, path: &str) -> Response {
+    let location = format!("{}/{}", upstream.trim_end_matches('/'), path.trim_start_matches('/'));
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(header::LOCATION, location)
+        .body(Body::empty())
+        .unwrap()
+}
+
 fn serve_blob_response(state: &AppState, fs: &vost::Fs, hash: &str, headers: &HeaderMap) -> Response {
     let etag = format!("\"{}\"", hash);
     let cc = state.cache_control();
@@ -511,7 +525,12 @@ fn serve_blob_response(state: &AppState, fs: &vost::Fs, hash: &str, headers: &He
                 state.blob_cache.insert(hash.to_string(), bytes.clone());
                 bytes
             }
-            Err(_) => return not_found(&format!("Blob not found: {}", hash)),
+            Err(_) => {
+                if let Some(ref upstream) = state.upstream {
+                    return redirect_upstream(upstream, &format!("_/blobs/{}", hash));
+                }
+                return not_found(&format!("Blob not found: {}", hash));
+            }
         }
     };
 
@@ -799,6 +818,10 @@ async fn handle_single_ref(
             if fs.read_by_hash(&repo_path, 0, Some(0)).is_ok() {
                 return serve_blob_response(&state, &fs, &repo_path, &headers);
             }
+            // Blob not found locally — redirect to upstream if available
+            if let Some(ref upstream) = state.upstream {
+                return redirect_upstream(upstream, &repo_path);
+            }
         }
 
         serve_path(&state, &fs, &ref_label, &state.base_path, &repo_path, &headers)
@@ -886,6 +909,10 @@ async fn handle_multi_ref_root(
                 if fs.read_by_hash(&ref_name, 0, Some(0)).is_ok() {
                     return serve_blob_response(&state, &fs, &ref_name, &headers);
                 }
+            }
+            // Blob not found locally — redirect to upstream if available
+            if let Some(ref upstream) = state.upstream {
+                return redirect_upstream(upstream, &ref_name);
             }
         }
 
@@ -1007,6 +1034,7 @@ async fn main() {
         max_file_size: args.max_file_size,
         blob_cache: BlobCache::new(args.cache_size),
         no_compress_types,
+        upstream: args.upstream.clone(),
     });
 
     // Note: axum automatically handles HEAD requests on GET routes

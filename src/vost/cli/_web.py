@@ -229,7 +229,7 @@ _DEFAULT_MAX_FILE_SIZE = 250 * 1024 * 1024  # 250 MB
 def _make_app(store, *, fs=None, resolver=None, ref_label=None,
               cors=False, cache_control="no-cache", base_path="",
               max_file_size=_DEFAULT_MAX_FILE_SIZE,
-              access_logger=None):
+              access_logger=None, upstream=None):
     """Return a WSGI application serving *store* contents over HTTP.
 
     Single-ref mode (one snapshot per request):
@@ -270,8 +270,10 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
                 return _send_404(start_response, f"Invalid blob hash: {hash_str}")
             blob_fs = _get_any_fs()
             if blob_fs is None:
+                if upstream:
+                    return _redirect_upstream(start_response, upstream, f"_/blobs/{hash_str}")
                 return _send_404(start_response, "No accessible ref")
-            return _serve_blob(environ, start_response, blob_fs, hash_str, want_json, cache_control)
+            return _serve_blob(environ, start_response, blob_fs, hash_str, want_json, cache_control, upstream)
 
         if single_ref:
             # --- Single-ref mode ---
@@ -280,8 +282,10 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
             if _is_hex40(path):
                 try:
                     current_fs.read_by_hash(path)
-                    return _serve_blob(environ, start_response, current_fs, path, want_json, cache_control)
+                    return _serve_blob(environ, start_response, current_fs, path, want_json, cache_control, upstream)
                 except Exception:
+                    if upstream:
+                        return _redirect_upstream(start_response, upstream, path)
                     pass  # fall through to normal path lookup
             return _serve_path(environ, start_response, current_fs,
                                ref_label or "", base_path, path, want_json,
@@ -298,9 +302,14 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
                 if blob_fs is not None:
                     try:
                         blob_fs.read_by_hash(path)
-                        return _serve_blob(environ, start_response, blob_fs, path, want_json, cache_control)
+                        return _serve_blob(environ, start_response, blob_fs, path, want_json, cache_control, upstream)
                     except Exception:
+                        if upstream:
+                            return _redirect_upstream(start_response, upstream, path)
                         pass  # fall through to ref lookup
+                else:
+                    if upstream:
+                        return _redirect_upstream(start_response, upstream, path)
 
             # First segment is the ref
             parts = path.split("/", 1)
@@ -536,7 +545,7 @@ def _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag
     return [body]
 
 
-def _serve_blob(environ, start_response, fs, hash_str, want_json, cache_control):
+def _serve_blob(environ, start_response, fs, hash_str, want_json, cache_control, upstream=None):
     """Serve raw blob content by git object hash."""
     etag = f'"{hash_str}"'
 
@@ -548,6 +557,8 @@ def _serve_blob(environ, start_response, fs, hash_str, want_json, cache_control)
     try:
         data = fs.read_by_hash(hash_str)
     except Exception:
+        if upstream:
+            return _redirect_upstream(start_response, upstream, f"_/blobs/{hash_str}")
         return _send_404(start_response, f"Blob not found: {hash_str}")
 
     if want_json:
@@ -603,6 +614,16 @@ def _serve_blob(environ, start_response, fs, hash_str, want_json, cache_control)
     return [data]
 
 
+def _redirect_upstream(start_response, upstream, path):
+    """Redirect to upstream server for blob lookup."""
+    location = f"{upstream.rstrip('/')}/{path.lstrip('/')}"
+    start_response("302 Found", [
+        ("Location", location),
+        ("Content-Length", "0"),
+    ])
+    return [b""]
+
+
 def _send_404(start_response, message="Not found"):
     """Send a 404 response."""
     body = message.encode()
@@ -644,10 +665,12 @@ def _send_404(start_response, message="Not found"):
               help="Set Cache-Control: immutable, max-age=31536000 (ideal for content-addressed data).")
 @click.option("--max-age", "max_age", type=int, default=None,
               help="Set Cache-Control: max-age=N (seconds). Overridden by --no-cache or --immutable.")
+@click.option("--upstream", default=None,
+              help="Upstream server URL for blob redirect on cache miss.")
 @click.pass_context
 def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
           all_refs, cors, no_cache, base_path, open_browser, quiet, log_file,
-          max_file_size_mb, immutable, max_age):
+          max_file_size_mb, immutable, max_age, upstream):
     """Serve repository files over HTTP.
 
     By default, serves the current branch at /<path>.  Use --ref, --back,
@@ -695,7 +718,8 @@ def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
                 "--all cannot be combined with --ref, --path, --match, --before, or --back"
             )
         app = _make_app(store, cors=cors, cache_control=cache_control, base_path=base_path,
-                        max_file_size=max_file_size, access_logger=access_logger)
+                        max_file_size=max_file_size, access_logger=access_logger,
+                        upstream=upstream)
         mode = "multi-ref"
     else:
         branch = branch or _current_branch(store)
@@ -708,7 +732,8 @@ def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
 
         app = _make_app(store, resolver=_resolve, ref_label=ref_label,
                         cors=cors, cache_control=cache_control, base_path=base_path,
-                        max_file_size=max_file_size, access_logger=access_logger)
+                        max_file_size=max_file_size, access_logger=access_logger,
+                        upstream=upstream)
         mode = f"branch {branch} (live)"
         if back:
             mode += f" ~{back}"
