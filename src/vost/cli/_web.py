@@ -131,18 +131,6 @@ def _cors_middleware(app):
     return wrapped
 
 
-def _no_cache_middleware(app):
-    """WSGI middleware that adds Cache-Control: no-store."""
-
-    def wrapped(environ, start_response):
-        def nocache_start_response(status, headers):
-            return start_response(status, headers + [("Cache-Control", "no-store")])
-
-        return app(environ, nocache_start_response)
-
-    return wrapped
-
-
 class _AccessLogger:
     """Write CLF access-log lines to stderr and/or a file."""
 
@@ -234,7 +222,7 @@ _DEFAULT_MAX_FILE_SIZE = 250 * 1024 * 1024  # 250 MB
 
 
 def _make_app(store, *, fs=None, resolver=None, ref_label=None,
-              cors=False, no_cache=False, base_path="",
+              cors=False, cache_control="no-cache", base_path="",
               max_file_size=_DEFAULT_MAX_FILE_SIZE,
               access_logger=None):
     """Return a WSGI application serving *store* contents over HTTP.
@@ -267,7 +255,7 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
             current_fs = _get_fs()
             return _serve_path(environ, start_response, current_fs,
                                ref_label or "", base_path, path, want_json,
-                               max_file_size)
+                               max_file_size, cache_control)
         else:
             # --- Multi-ref mode ---
             if not path:
@@ -286,15 +274,13 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
             resolved = _resolve_fs_for_ref(store, ref_name)
             return _serve_path(environ, start_response, resolved, ref_name,
                                f"{base_path}/{ref_name}", rest, want_json,
-                               max_file_size)
+                               max_file_size, cache_control)
 
     result = app
     if base_path:
         result = _base_path_middleware(result, base_path)
     if cors:
         result = _cors_middleware(result)
-    if no_cache:
-        result = _no_cache_middleware(result)
     if access_logger is not None:
         result = _logging_middleware(result, access_logger)
     return result
@@ -340,27 +326,39 @@ def _serve_ref_listing(start_response, store, base_path, want_json):
 
 
 def _serve_path(environ, start_response, fs, ref_label, link_prefix, path, want_json,
-                max_file_size=_DEFAULT_MAX_FILE_SIZE):
+                max_file_size=_DEFAULT_MAX_FILE_SIZE, cache_control="no-cache"):
     """Serve a file or directory listing within a resolved FS."""
-    etag = f'"{fs.commit_hash}"'
-
-    # 304 Not Modified if client ETag matches
     if_none_match = environ.get("HTTP_IF_NONE_MATCH")
-    if if_none_match and if_none_match == etag:
-        start_response("304 Not Modified", [("ETag", etag)])
-        return [b""]
 
     if not path:
-        return _serve_dir(start_response, fs, ref_label, link_prefix, "", want_json, etag)
+        etag = f'"{fs.commit_hash}"'
+        if if_none_match and if_none_match == etag:
+            start_response("304 Not Modified", [("ETag", etag)])
+            return [b""]
+        return _serve_dir(start_response, fs, ref_label, link_prefix, "", want_json, etag, cache_control)
 
     if not fs.exists(path):
         return _send_404(start_response, f"Not found: {path}")
 
     if fs.is_dir(path):
-        return _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag)
+        etag = f'"{fs.commit_hash}"'
+        if if_none_match and if_none_match == etag:
+            start_response("304 Not Modified", [("ETag", etag)])
+            return [b""]
+        return _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag, cache_control)
 
-    return _serve_file(start_response, fs, ref_label, path, want_json, etag,
-                       max_file_size)
+    # File: per-blob ETag
+    try:
+        st = fs.stat(path)
+        etag = f'"{st.hash}"'
+        if if_none_match and if_none_match == etag:
+            start_response("304 Not Modified", [("ETag", etag)])
+            return [b""]
+    except Exception:
+        pass
+
+    return _serve_file(environ, start_response, fs, ref_label, path, want_json,
+                       max_file_size, cache_control)
 
 
 def _send_413(start_response, path, size, limit):
@@ -374,8 +372,8 @@ def _send_413(start_response, path, size, limit):
     return [body]
 
 
-def _serve_file(start_response, fs, ref_label, path, want_json, etag,
-                max_file_size=_DEFAULT_MAX_FILE_SIZE):
+def _serve_file(environ, start_response, fs, ref_label, path, want_json,
+                max_file_size=_DEFAULT_MAX_FILE_SIZE, cache_control="no-cache"):
     """Serve file contents or JSON metadata."""
     # Check size before reading
     if max_file_size > 0:
@@ -388,6 +386,9 @@ def _serve_file(start_response, fs, ref_label, path, want_json, etag,
 
     data = fs.read(path)
 
+    st = fs.stat(path)
+    etag = f'"{st.hash}"'
+
     if want_json:
         body = json.dumps({
             "path": path,
@@ -399,22 +400,52 @@ def _serve_file(start_response, fs, ref_label, path, want_json, etag,
             ("Content-Type", "application/json"),
             ("Content-Length", str(len(body))),
             ("ETag", etag),
-            ("Cache-Control", "no-cache"),
+            ("Cache-Control", cache_control),
         ])
         return [body]
 
     mime = _guess_mime(path)
 
+    # Range request support
+    range_header = environ.get("HTTP_RANGE")
+    if range_header and range_header.startswith("bytes="):
+        total = len(data)
+        range_spec = range_header[6:]
+        try:
+            if range_spec.startswith("-"):
+                suffix = int(range_spec[1:])
+                start = max(0, total - suffix)
+                end = total - 1
+            else:
+                parts = range_spec.split("-", 1)
+                start = int(parts[0])
+                end = int(parts[1]) if parts[1] else total - 1
+                end = min(end, total - 1)
+            if 0 <= start <= end < total:
+                slice_data = data[start:end + 1]
+                start_response("206 Partial Content", [
+                    ("Content-Type", mime),
+                    ("Content-Length", str(len(slice_data))),
+                    ("Content-Range", f"bytes {start}-{end}/{total}"),
+                    ("Accept-Ranges", "bytes"),
+                    ("ETag", etag),
+                    ("Cache-Control", cache_control),
+                ])
+                return [slice_data]
+        except (ValueError, IndexError):
+            pass  # fall through to full response
+
     start_response("200 OK", [
         ("Content-Type", mime),
         ("Content-Length", str(len(data))),
+        ("Accept-Ranges", "bytes"),
         ("ETag", etag),
-        ("Cache-Control", "no-cache"),
+        ("Cache-Control", cache_control),
     ])
     return [data]
 
 
-def _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag):
+def _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag, cache_control="no-cache"):
     """Serve directory listing as JSON or HTML."""
     entries = fs.ls(path if path else None)
 
@@ -439,7 +470,7 @@ def _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag
             ("Content-Type", "application/json"),
             ("Content-Length", str(len(body))),
             ("ETag", etag),
-            ("Cache-Control", "no-cache"),
+            ("Cache-Control", cache_control),
         ])
         return [body]
 
@@ -459,7 +490,7 @@ def _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag
         ("Content-Type", "text/html; charset=utf-8"),
         ("Content-Length", str(len(body))),
         ("ETag", etag),
-        ("Cache-Control", "no-cache"),
+        ("Cache-Control", cache_control),
     ])
     return [body]
 
@@ -501,10 +532,14 @@ def _send_404(start_response, message="Not found"):
               help="Append access log to file (CLF format).")
 @click.option("--max-file-size", "max_file_size_mb", type=int, default=250,
               help="Maximum file size to serve in MB (default: 250, 0 = unlimited).")
+@click.option("--immutable", is_flag=True, default=False,
+              help="Set Cache-Control: immutable, max-age=31536000 (ideal for content-addressed data).")
+@click.option("--max-age", "max_age", type=int, default=None,
+              help="Set Cache-Control: max-age=N (seconds). Overridden by --no-cache or --immutable.")
 @click.pass_context
 def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
           all_refs, cors, no_cache, base_path, open_browser, quiet, log_file,
-          max_file_size_mb):
+          max_file_size_mb, immutable, max_age):
     """Serve repository files over HTTP.
 
     By default, serves the current branch at /<path>.  Use --ref, --back,
@@ -536,6 +571,14 @@ def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
 
     max_file_size = max_file_size_mb * 1024 * 1024 if max_file_size_mb > 0 else 0
 
+    cache_control = "no-cache"
+    if no_cache:
+        cache_control = "no-store"
+    elif immutable:
+        cache_control = "public, immutable, max-age=31536000"
+    elif max_age is not None:
+        cache_control = f"public, max-age={max_age}"
+
     access_logger = _AccessLogger(quiet=quiet, log_file=log_file)
 
     if all_refs:
@@ -543,7 +586,7 @@ def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
             raise click.ClickException(
                 "--all cannot be combined with --ref, --path, --match, --before, or --back"
             )
-        app = _make_app(store, cors=cors, no_cache=no_cache, base_path=base_path,
+        app = _make_app(store, cors=cors, cache_control=cache_control, base_path=base_path,
                         max_file_size=max_file_size, access_logger=access_logger)
         mode = "multi-ref"
     else:
@@ -556,7 +599,7 @@ def serve(ctx, host, port, branch, ref, at_path, match_pattern, before, back,
                                before=before, back=back)
 
         app = _make_app(store, resolver=_resolve, ref_label=ref_label,
-                        cors=cors, no_cache=no_cache, base_path=base_path,
+                        cors=cors, cache_control=cache_control, base_path=base_path,
                         max_file_size=max_file_size, access_logger=access_logger)
         mode = f"branch {branch} (live)"
         if back:

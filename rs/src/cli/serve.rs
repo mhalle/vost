@@ -28,6 +28,12 @@ pub struct ServeArgs {
     /// Send Cache-Control: no-store on every response.
     #[arg(long)]
     pub no_cache: bool,
+    /// Set Cache-Control: immutable, max-age=31536000.
+    #[arg(long)]
+    pub immutable: bool,
+    /// Set Cache-Control: max-age=N (seconds). Overridden by --no-cache or --immutable.
+    #[arg(long)]
+    pub max_age: Option<u64>,
     /// URL prefix to mount under (e.g. /data).
     #[arg(long, default_value = "")]
     pub base_path: String,
@@ -311,25 +317,26 @@ fn serve_file(
     request: tiny_http::Request,
     fs: &crate::Fs,
     path: &str,
-    etag: &str,
     want_json: bool,
     cors: bool,
-    no_cache: bool,
+    cache_control: &str,
     ref_label: &str,
     max_file_size: u64,
 ) -> ResponseInfo {
-    // Check size before reading
-    if max_file_size > 0 {
-        if let Ok(file_size) = fs.size(path) {
-            if file_size > max_file_size {
-                let msg = format!(
-                    "File too large: {} ({} bytes, limit {} bytes)",
-                    path, file_size, max_file_size
-                );
-                return respond_tracked(request, 413, "text/plain", msg.as_bytes(), &[]);
-            }
-        }
+    let st = match fs.stat(path) {
+        Ok(st) => st,
+        Err(_) => return respond_404_tracked(request, &format!("Not found: {}", path)),
+    };
+
+    if max_file_size > 0 && st.size > max_file_size {
+        let msg = format!(
+            "File too large: {} ({} bytes, limit {} bytes)",
+            path, st.size, max_file_size
+        );
+        return respond_tracked(request, 413, "text/plain", msg.as_bytes(), &[]);
     }
+
+    let etag = format!("\"{}\"", st.hash);
 
     let data = match fs.read(path) {
         Ok(d) => d,
@@ -337,14 +344,36 @@ fn serve_file(
     };
 
     let mut headers: Vec<(&str, &str)> = vec![
-        ("ETag", etag),
-        ("Cache-Control", "no-cache"),
+        ("ETag", &etag),
+        ("Cache-Control", cache_control),
+        ("Accept-Ranges", "bytes"),
     ];
     if cors {
         headers.push(("Access-Control-Allow-Origin", "*"));
     }
-    if no_cache {
-        headers.push(("Cache-Control", "no-store"));
+
+    // Range request support
+    let range_header = request.headers().iter()
+        .find(|h| h.field.as_str() == "Range" || h.field.as_str() == "range")
+        .map(|h| h.value.as_str().to_string());
+
+    if let Some(ref range_val) = range_header {
+        if let Some(range) = parse_range(range_val, data.len() as u64) {
+            let (start, end) = range;
+            let slice = &data[start as usize..(end + 1) as usize];
+            let content_range = format!("bytes {}-{}/{}", start, end, data.len());
+            let mime = guess_mime(path);
+            let mut range_headers: Vec<(&str, &str)> = vec![
+                ("ETag", &etag),
+                ("Cache-Control", cache_control),
+                ("Accept-Ranges", "bytes"),
+                ("Content-Range", &content_range),
+            ];
+            if cors {
+                range_headers.push(("Access-Control-Allow-Origin", "*"));
+            }
+            return respond_tracked(request, 206, mime, slice, &range_headers);
+        }
     }
 
     if want_json {
@@ -371,7 +400,7 @@ fn serve_dir(
     etag: &str,
     want_json: bool,
     cors: bool,
-    no_cache: bool,
+    cache_control: &str,
 ) -> ResponseInfo {
     let entries = match fs.ls(path) {
         Ok(e) => e,
@@ -380,13 +409,10 @@ fn serve_dir(
 
     let mut headers: Vec<(&str, &str)> = vec![
         ("ETag", etag),
-        ("Cache-Control", "no-cache"),
+        ("Cache-Control", cache_control),
     ];
     if cors {
         headers.push(("Access-Control-Allow-Origin", "*"));
-    }
-    if no_cache {
-        headers.push(("Cache-Control", "no-store"));
     }
 
     let mut sorted: Vec<&String> = entries.iter().collect();
@@ -515,7 +541,7 @@ fn serve_path(
     link_prefix: &str,
     path: &str,
     cors: bool,
-    no_cache: bool,
+    cache_control: &str,
     max_file_size: u64,
 ) -> ResponseInfo {
     let etag = format!(
@@ -523,17 +549,12 @@ fn serve_path(
         fs.commit_hash().unwrap_or_default()
     );
 
-    // Check If-None-Match
+    // Check If-None-Match for directories (commit-level etag)
     let if_none_match: Option<String> = request
         .headers()
         .iter()
         .find(|h| h.field.as_str() == "If-None-Match" || h.field.as_str() == "if-none-match")
         .map(|h| h.value.as_str().to_string());
-    if let Some(ref inm) = if_none_match {
-        if inm == &etag {
-            return respond_304_tracked(request, &etag);
-        }
-    }
 
     let accept = request
         .headers()
@@ -544,8 +565,13 @@ fn serve_path(
     let want_json = accept.contains("application/json");
 
     if path.is_empty() {
+        if let Some(ref inm) = if_none_match {
+            if inm == &etag {
+                return respond_304_tracked(request, &etag);
+            }
+        }
         return serve_dir(
-            request, fs, ref_label, link_prefix, "", &etag, want_json, cors, no_cache,
+            request, fs, ref_label, link_prefix, "", &etag, want_json, cors, cache_control,
         );
     }
 
@@ -554,11 +580,25 @@ fn serve_path(
     }
 
     if fs.is_dir(path).unwrap_or(false) {
+        if let Some(ref inm) = if_none_match {
+            if inm == &etag {
+                return respond_304_tracked(request, &etag);
+            }
+        }
         serve_dir(
-            request, fs, ref_label, link_prefix, path, &etag, want_json, cors, no_cache,
+            request, fs, ref_label, link_prefix, path, &etag, want_json, cors, cache_control,
         )
     } else {
-        serve_file(request, fs, path, &etag, want_json, cors, no_cache, ref_label, max_file_size)
+        // Per-blob ETag for files
+        if let Ok(st) = fs.stat(path) {
+            let blob_etag = format!("\"{}\"", st.hash);
+            if let Some(ref inm) = if_none_match {
+                if inm == &blob_etag {
+                    return respond_304_tracked(request, &blob_etag);
+                }
+            }
+        }
+        serve_file(request, fs, path, want_json, cors, cache_control, ref_label, max_file_size)
     }
 }
 
@@ -619,6 +659,16 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
         args.max_file_size * 1024 * 1024
     } else {
         0
+    };
+
+    let cache_control = if args.no_cache {
+        "no-store".to_string()
+    } else if args.immutable {
+        "public, immutable, max-age=31536000".to_string()
+    } else if let Some(max_age) = args.max_age {
+        format!("public, max-age={}", max_age)
+    } else {
+        "no-cache".to_string()
     };
 
     let mut access_logger = AccessLogger::new(args.quiet, args.log_file.as_deref())
@@ -708,7 +758,7 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
                 match store.fs(ref_name) {
                     Ok(fs) => {
                         let link_pfx = format!("{}/{}", base_path, ref_name);
-                        serve_path(request, &fs, ref_name, &link_pfx, rest, args.cors, args.no_cache, max_file_bytes)
+                        serve_path(request, &fs, ref_name, &link_pfx, rest, args.cors, &cache_control, max_file_bytes)
                     }
                     Err(_) => {
                         respond_404_tracked(request, &format!("Unknown ref: {}", ref_name))
@@ -726,7 +776,7 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
                         &base_path,
                         &path,
                         args.cors,
-                        args.no_cache,
+                        &cache_control,
                         max_file_bytes,
                     )
                 }
@@ -741,6 +791,24 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
 
     log::info!("Stopped.");
     Ok(())
+}
+
+fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
+    let spec = header.strip_prefix("bytes=")?;
+    let (start_s, end_s) = spec.split_once('-')?;
+    if start_s.is_empty() {
+        let suffix: u64 = end_s.parse().ok()?;
+        let start = total.saturating_sub(suffix);
+        Some((start, total - 1))
+    } else {
+        let start: u64 = start_s.parse().ok()?;
+        let end = if end_s.is_empty() {
+            total - 1
+        } else {
+            end_s.parse::<u64>().ok()?.min(total - 1)
+        };
+        if start > end || start >= total { None } else { Some((start, end)) }
+    }
 }
 
 fn percent_decode(s: &str) -> String {

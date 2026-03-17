@@ -414,13 +414,16 @@ class TestMultiRefBranches:
 
 class TestETag:
     def test_file_has_etag(self, store_with_files):
+        """File ETags use blob hash, not commit hash."""
         fs = store_with_files.branches["main"]
         app = _make_app(store_with_files, fs=fs, ref_label="main")
         _, headers, _ = _wsgi_get(app, "/hello.txt")
         assert "ETag" in headers
-        assert headers["ETag"] == f'"{fs.commit_hash}"'
+        blob_hash = fs.stat("hello.txt").hash
+        assert headers["ETag"] == f'"{blob_hash}"'
 
     def test_dir_has_etag(self, store_with_files):
+        """Directory ETags use commit hash."""
         fs = store_with_files.branches["main"]
         app = _make_app(store_with_files, fs=fs, ref_label="main")
         _, headers, _ = _wsgi_get(app, "/data")
@@ -428,11 +431,13 @@ class TestETag:
         assert headers["ETag"] == f'"{fs.commit_hash}"'
 
     def test_json_has_etag(self, store_with_files):
+        """JSON file metadata ETags use blob hash."""
         fs = store_with_files.branches["main"]
         app = _make_app(store_with_files, fs=fs, ref_label="main")
         _, headers, _ = _wsgi_get(app, "/hello.txt", accept="application/json")
         assert "ETag" in headers
-        assert headers["ETag"] == f'"{fs.commit_hash}"'
+        blob_hash = fs.stat("hello.txt").hash
+        assert headers["ETag"] == f'"{blob_hash}"'
 
     def test_root_has_etag(self, store_with_files):
         fs = store_with_files.branches["main"]
@@ -441,19 +446,45 @@ class TestETag:
         assert "ETag" in headers
 
     def test_multi_ref_file_has_etag(self, store_with_files):
+        """Multi-ref file ETags use blob hash."""
         app = _make_app(store_with_files)
         _, headers, _ = _wsgi_get(app, "/main/hello.txt")
         assert "ETag" in headers
         fs = store_with_files.branches["main"]
-        assert headers["ETag"] == f'"{fs.commit_hash}"'
+        blob_hash = fs.stat("hello.txt").hash
+        assert headers["ETag"] == f'"{blob_hash}"'
 
-    def test_different_snapshots_different_etags(self, store_with_files):
+    def test_different_content_different_etags(self, tmp_path):
+        """Files with different content produce different blob-level ETags."""
+        store = GitStore.open(str(tmp_path / "etag.git"), branch="main")
+        fs = store.branches["main"]
+        fs = fs.write("file.txt", b"version 1\n")
+        fs = fs.write("file.txt", b"version 2\n")
+        old_fs = fs.back(1)
+        app_new = _make_app(store, fs=fs, ref_label="main")
+        app_old = _make_app(store, fs=old_fs, ref_label="main")
+        _, h_new, _ = _wsgi_get(app_new, "/file.txt")
+        _, h_old, _ = _wsgi_get(app_old, "/file.txt")
+        assert h_new["ETag"] != h_old["ETag"]
+
+    def test_same_content_same_etag_across_commits(self, store_with_files):
+        """Same file content across different commits produces same blob ETag."""
         fs = store_with_files.branches["main"]
         old_fs = fs.back(1)
         app_new = _make_app(store_with_files, fs=fs, ref_label="main")
         app_old = _make_app(store_with_files, fs=old_fs, ref_label="main")
         _, h_new, _ = _wsgi_get(app_new, "/hello.txt")
         _, h_old, _ = _wsgi_get(app_old, "/hello.txt")
+        assert h_new["ETag"] == h_old["ETag"]
+
+    def test_different_commits_different_dir_etags(self, store_with_files):
+        """Directory ETags use commit hash, so different commits give different ETags."""
+        fs = store_with_files.branches["main"]
+        old_fs = fs.back(1)
+        app_new = _make_app(store_with_files, fs=fs, ref_label="main")
+        app_old = _make_app(store_with_files, fs=old_fs, ref_label="main")
+        _, h_new, _ = _wsgi_get(app_new, "/data")
+        _, h_old, _ = _wsgi_get(app_old, "/data")
         assert h_new["ETag"] != h_old["ETag"]
 
     def test_404_has_no_etag(self, store_with_files):
@@ -487,9 +518,11 @@ class TestCacheControl:
         assert headers["Cache-Control"] == "no-cache"
 
     def test_304_on_matching_etag(self, store_with_files):
+        """File 304 uses blob hash etag."""
         fs = store_with_files.branches["main"]
         app = _make_app(store_with_files, fs=fs, ref_label="main")
-        etag = f'"{fs.commit_hash}"'
+        blob_hash = fs.stat("hello.txt").hash
+        etag = f'"{blob_hash}"'
         status, headers, body = _wsgi_get(app, "/hello.txt", if_none_match=etag)
         assert status == "304 Not Modified"
         assert body == b""
@@ -511,9 +544,11 @@ class TestCacheControl:
         assert body == b"hello world\n"
 
     def test_304_multi_ref(self, store_with_files):
+        """Multi-ref file 304 uses blob hash etag."""
         app = _make_app(store_with_files)
         fs = store_with_files.branches["main"]
-        etag = f'"{fs.commit_hash}"'
+        blob_hash = fs.stat("hello.txt").hash
+        etag = f'"{blob_hash}"'
         status, _, body = _wsgi_get(app, "/main/hello.txt", if_none_match=etag)
         assert status == "304 Not Modified"
         assert body == b""
@@ -521,7 +556,7 @@ class TestCacheControl:
     def test_no_store_overrides_no_cache(self, store_with_files):
         """--no-cache flag sends no-store which overrides the default no-cache."""
         fs = store_with_files.branches["main"]
-        app = _make_app(store_with_files, fs=fs, ref_label="main", no_cache=True)
+        app = _make_app(store_with_files, fs=fs, ref_label="main", cache_control="no-store")
         _, headers, _ = _wsgi_get(app, "/hello.txt")
         assert headers["Cache-Control"] == "no-store"
 
@@ -673,27 +708,28 @@ class TestNoCache:
 
     def test_no_cache_adds_header(self, store_with_files):
         fs = store_with_files.branches["main"]
-        app = _make_app(store_with_files, fs=fs, ref_label="main", no_cache=True)
+        app = _make_app(store_with_files, fs=fs, ref_label="main", cache_control="no-store")
         _, headers, _ = _wsgi_get(app, "/hello.txt")
         assert headers["Cache-Control"] == "no-store"
 
     def test_no_cache_on_dir(self, store_with_files):
         fs = store_with_files.branches["main"]
-        app = _make_app(store_with_files, fs=fs, ref_label="main", no_cache=True)
+        app = _make_app(store_with_files, fs=fs, ref_label="main", cache_control="no-store")
         _, headers, _ = _wsgi_get(app, "/data")
         assert headers["Cache-Control"] == "no-store"
 
     def test_no_cache_on_404(self, store_with_files):
+        """404 responses do not carry cache-control (only served content does)."""
         fs = store_with_files.branches["main"]
-        app = _make_app(store_with_files, fs=fs, ref_label="main", no_cache=True)
+        app = _make_app(store_with_files, fs=fs, ref_label="main", cache_control="no-store")
         status, headers, _ = _wsgi_get(app, "/nonexistent.txt")
         assert status == "404 Not Found"
-        assert headers["Cache-Control"] == "no-store"
+        assert "Cache-Control" not in headers
 
     def test_no_cache_combined_with_cors(self, store_with_files):
         fs = store_with_files.branches["main"]
         app = _make_app(store_with_files, fs=fs, ref_label="main",
-                        cors=True, no_cache=True)
+                        cors=True, cache_control="no-store")
         _, headers, _ = _wsgi_get(app, "/hello.txt")
         assert headers["Cache-Control"] == "no-store"
         assert headers["Access-Control-Allow-Origin"] == "*"
