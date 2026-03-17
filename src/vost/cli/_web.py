@@ -40,6 +40,11 @@ _MIME_OVERRIDES = {
 
 # Extensions that should be served as text/plain when mimetypes doesn't
 # recognize them.  Covers source code, config, and data formats.
+def _is_hex40(s: str) -> bool:
+    """Return True if *s* is exactly 40 lowercase hex characters."""
+    return len(s) == 40 and all(c in '0123456789abcdef' for c in s)
+
+
 _TEXT_EXTENSIONS = frozenset((
     # Programming languages
     ".py", ".pyi", ".pyw", ".rs", ".go", ".c", ".h", ".cpp", ".hpp", ".cc",
@@ -244,15 +249,40 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
             return resolver()
         return fs
 
+    def _get_any_fs():
+        """Get any FS for object store access (blobs are ref-independent)."""
+        if single_ref:
+            return _get_fs()
+        for name in sorted(store.branches):
+            return store.branches[name]
+        return None
+
     def app(environ, start_response):
         path_info = environ.get("PATH_INFO", "/")
         path = path_info.strip("/")
         accept = environ.get("HTTP_ACCEPT", "")
         want_json = "application/json" in accept
 
+        # /_/blobs/{hash} — explicit content-addressed blob access
+        if path.startswith("_/blobs/"):
+            hash_str = path[8:]
+            if not _is_hex40(hash_str):
+                return _send_404(start_response, f"Invalid blob hash: {hash_str}")
+            blob_fs = _get_any_fs()
+            if blob_fs is None:
+                return _send_404(start_response, "No accessible ref")
+            return _serve_blob(environ, start_response, blob_fs, hash_str, want_json, cache_control)
+
         if single_ref:
             # --- Single-ref mode ---
             current_fs = _get_fs()
+            # /{40-hex} — try blob hash first, fall back to path
+            if _is_hex40(path):
+                try:
+                    current_fs.read_by_hash(path)
+                    return _serve_blob(environ, start_response, current_fs, path, want_json, cache_control)
+                except Exception:
+                    pass  # fall through to normal path lookup
             return _serve_path(environ, start_response, current_fs,
                                ref_label or "", base_path, path, want_json,
                                max_file_size, cache_control)
@@ -261,6 +291,16 @@ def _make_app(store, *, fs=None, resolver=None, ref_label=None,
             if not path:
                 return _serve_ref_listing(start_response, store, base_path,
                                           want_json)
+
+            # /{40-hex} — try blob hash first (ref-independent)
+            if _is_hex40(path):
+                blob_fs = _get_any_fs()
+                if blob_fs is not None:
+                    try:
+                        blob_fs.read_by_hash(path)
+                        return _serve_blob(environ, start_response, blob_fs, path, want_json, cache_control)
+                    except Exception:
+                        pass  # fall through to ref lookup
 
             # First segment is the ref
             parts = path.split("/", 1)
@@ -494,6 +534,73 @@ def _serve_dir(start_response, fs, ref_label, link_prefix, path, want_json, etag
         ("Cache-Control", cache_control),
     ])
     return [body]
+
+
+def _serve_blob(environ, start_response, fs, hash_str, want_json, cache_control):
+    """Serve raw blob content by git object hash."""
+    etag = f'"{hash_str}"'
+
+    if_none_match = environ.get("HTTP_IF_NONE_MATCH")
+    if if_none_match and if_none_match == etag:
+        start_response("304 Not Modified", [("ETag", etag)])
+        return [b""]
+
+    try:
+        data = fs.read_by_hash(hash_str)
+    except Exception:
+        return _send_404(start_response, f"Blob not found: {hash_str}")
+
+    if want_json:
+        body = json.dumps({
+            "hash": hash_str,
+            "size": len(data),
+            "type": "blob",
+        }).encode()
+        start_response("200 OK", [
+            ("Content-Type", "application/json"),
+            ("Content-Length", str(len(body))),
+            ("ETag", etag),
+            ("Cache-Control", cache_control),
+        ])
+        return [body]
+
+    # Range request
+    range_header = environ.get("HTTP_RANGE")
+    if range_header and range_header.startswith("bytes="):
+        total = len(data)
+        range_spec = range_header[6:]
+        try:
+            if range_spec.startswith("-"):
+                suffix = int(range_spec[1:])
+                start = max(0, total - suffix)
+                end = total - 1
+            else:
+                parts = range_spec.split("-", 1)
+                start = int(parts[0])
+                end = int(parts[1]) if parts[1] else total - 1
+                end = min(end, total - 1)
+            if 0 <= start <= end < total:
+                slice_data = data[start:end + 1]
+                start_response("206 Partial Content", [
+                    ("Content-Type", "application/octet-stream"),
+                    ("Content-Length", str(len(slice_data))),
+                    ("Content-Range", f"bytes {start}-{end}/{total}"),
+                    ("Accept-Ranges", "bytes"),
+                    ("ETag", etag),
+                    ("Cache-Control", cache_control),
+                ])
+                return [slice_data]
+        except (ValueError, IndexError):
+            pass
+
+    start_response("200 OK", [
+        ("Content-Type", "application/octet-stream"),
+        ("Content-Length", str(len(data))),
+        ("Accept-Ranges", "bytes"),
+        ("ETag", etag),
+        ("Cache-Control", cache_control),
+    ])
+    return [data]
 
 
 def _send_404(start_response, message="Not found"):

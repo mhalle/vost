@@ -1376,3 +1376,111 @@ class TestCacheControlModes:
                         cache_control="public, max-age=600")
         _, headers, _ = _wsgi_get(app, "/hello.txt", accept="application/json")
         assert headers["Cache-Control"] == "public, max-age=600"
+
+
+# ---------------------------------------------------------------------------
+# Blob access tests (/_/blobs/{hash} and /{hash})
+# ---------------------------------------------------------------------------
+
+class TestBlobAccess:
+    def test_explicit_blob_route(self, store_with_files):
+        """/_/blobs/{hash} returns raw blob content."""
+        fs = store_with_files.branches["main"]
+        blob_hash = fs.stat("hello.txt").hash
+        app = _make_app(store_with_files, fs=fs, ref_label="main")
+        status, headers, body = _wsgi_get(app, f"/_/blobs/{blob_hash}")
+        assert status == "200 OK"
+        assert body == b"hello world\n"
+        assert headers["Content-Type"] == "application/octet-stream"
+        assert headers["ETag"] == f'"{blob_hash}"'
+        assert headers["Accept-Ranges"] == "bytes"
+
+    def test_shorthand_hash_route(self, store_with_files):
+        """/{40-hex} resolves as blob when it exists."""
+        fs = store_with_files.branches["main"]
+        blob_hash = fs.stat("hello.txt").hash
+        app = _make_app(store_with_files, fs=fs, ref_label="main")
+        status, _, body = _wsgi_get(app, f"/{blob_hash}")
+        assert status == "200 OK"
+        assert body == b"hello world\n"
+
+    def test_shorthand_falls_back_to_path(self, store_with_files):
+        """/{40-hex} that isn't a blob falls through to normal path lookup."""
+        fs = store_with_files.branches["main"]
+        app = _make_app(store_with_files, fs=fs, ref_label="main")
+        # A 40-char hex string that isn't a real blob → 404 via path lookup
+        status, _, _ = _wsgi_get(app, "/0000000000000000000000000000000000000000")
+        assert status == "404 Not Found"
+
+    def test_blob_304(self, store_with_files):
+        """Blob route supports ETag-based 304."""
+        fs = store_with_files.branches["main"]
+        blob_hash = fs.stat("hello.txt").hash
+        etag = f'"{blob_hash}"'
+        app = _make_app(store_with_files, fs=fs, ref_label="main")
+        status, _, body = _wsgi_get(app, f"/_/blobs/{blob_hash}", if_none_match=etag)
+        assert status == "304 Not Modified"
+        assert body == b""
+
+    def test_blob_range(self, store_with_files):
+        """Blob route supports Range requests."""
+        fs = store_with_files.branches["main"]
+        blob_hash = fs.stat("hello.txt").hash
+        app = _make_app(store_with_files, fs=fs, ref_label="main")
+        status, headers, body = _wsgi_get(app, f"/_/blobs/{blob_hash}", range="bytes=0-4")
+        assert status == "206 Partial Content"
+        assert body == b"hello"
+        assert "Content-Range" in headers
+
+    def test_blob_json(self, store_with_files):
+        """Blob route returns JSON metadata with Accept: application/json."""
+        fs = store_with_files.branches["main"]
+        blob_hash = fs.stat("hello.txt").hash
+        app = _make_app(store_with_files, fs=fs, ref_label="main")
+        status, _, body = _wsgi_get(app, f"/_/blobs/{blob_hash}", accept="application/json")
+        assert status == "200 OK"
+        data = json.loads(body)
+        assert data["hash"] == blob_hash
+        assert data["size"] == len(b"hello world\n")
+        assert data["type"] == "blob"
+
+    def test_blob_invalid_hash(self, store_with_files):
+        """Invalid hash format returns 404."""
+        fs = store_with_files.branches["main"]
+        app = _make_app(store_with_files, fs=fs, ref_label="main")
+        status, _, _ = _wsgi_get(app, "/_/blobs/not-a-hash")
+        assert status == "404 Not Found"
+
+    def test_blob_nonexistent_hash(self, store_with_files):
+        """Valid format but nonexistent blob returns 404."""
+        fs = store_with_files.branches["main"]
+        app = _make_app(store_with_files, fs=fs, ref_label="main")
+        status, _, _ = _wsgi_get(app, "/_/blobs/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        assert status == "404 Not Found"
+
+    def test_blob_multi_ref(self, store_with_files):
+        """Blob access works in multi-ref mode."""
+        fs = store_with_files.branches["main"]
+        blob_hash = fs.stat("hello.txt").hash
+        app = _make_app(store_with_files)  # multi-ref (no fs/resolver)
+        status, _, body = _wsgi_get(app, f"/_/blobs/{blob_hash}")
+        assert status == "200 OK"
+        assert body == b"hello world\n"
+
+    def test_shorthand_multi_ref(self, store_with_files):
+        """/{40-hex} works in multi-ref mode."""
+        fs = store_with_files.branches["main"]
+        blob_hash = fs.stat("hello.txt").hash
+        app = _make_app(store_with_files)
+        status, _, body = _wsgi_get(app, f"/{blob_hash}")
+        assert status == "200 OK"
+        assert body == b"hello world\n"
+
+    def test_blob_cache_control(self, store_with_files):
+        """Blob route respects cache_control setting."""
+        fs = store_with_files.branches["main"]
+        blob_hash = fs.stat("hello.txt").hash
+        app = _make_app(store_with_files, fs=fs, ref_label="main",
+                        cache_control="public, immutable, max-age=31536000")
+        _, headers, _ = _wsgi_get(app, f"/_/blobs/{blob_hash}")
+        assert headers["Cache-Control"] == "public, immutable, max-age=31536000"

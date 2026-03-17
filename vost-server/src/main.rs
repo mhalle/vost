@@ -467,6 +467,70 @@ fn html_response(html: String, etag: &str, cache_control: &str) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// Blob hash check
+// ---------------------------------------------------------------------------
+
+fn is_hex40(s: &str) -> bool {
+    s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn get_any_fs(state: &AppState) -> Option<vost::Fs> {
+    if let Some(fs) = state.resolve_single_ref_fs() {
+        return Some(fs);
+    }
+    let branches = state.store.branches().list().unwrap_or_default();
+    branches.first().and_then(|name| state.resolve_fs(name))
+}
+
+fn serve_blob_response(state: &AppState, fs: &vost::Fs, hash: &str, headers: &HeaderMap) -> Response {
+    let etag = format!("\"{}\"", hash);
+    let cc = state.cache_control();
+    let want_json = wants_json(headers);
+
+    // 304
+    if let Some(inm) = headers.get(header::IF_NONE_MATCH) {
+        if inm.to_str().ok() == Some(&etag) {
+            return Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header(header::ETAG, &etag)
+                .body(Body::empty())
+                .unwrap();
+        }
+    }
+
+    let data = match fs.read_by_hash(hash, 0, None) {
+        Ok(d) => d,
+        Err(_) => return not_found(&format!("Blob not found: {}", hash)),
+    };
+
+    if want_json {
+        return json_response(
+            serde_json::json!({
+                "hash": hash,
+                "size": data.len(),
+                "type": "blob",
+            }),
+            &etag,
+            &cc,
+        );
+    }
+
+    // Use blob cache
+    {
+        let mut cache = state.blob_cache.lock().unwrap();
+        cache.insert(hash.to_string(), data.clone());
+    }
+
+    let total = data.len() as u64;
+    if let Some((start, end)) = parse_range(headers, total) {
+        let slice = data[start as usize..(end + 1) as usize].to_vec();
+        return range_response(slice, "application/octet-stream", &etag, &cc, start, end, total, true);
+    }
+
+    file_response(data, "application/octet-stream", &etag, &cc, true)
+}
+
+// ---------------------------------------------------------------------------
 // Serving logic
 // ---------------------------------------------------------------------------
 
@@ -723,6 +787,14 @@ async fn handle_single_ref(
             Some(fs) => fs,
             None => return not_found(&format!("Ref not found: {}", ref_label)),
         };
+
+        // /{40-hex} — try blob hash first, fall back to path
+        if is_hex40(&repo_path) {
+            if fs.read_by_hash(&repo_path, 0, Some(0)).is_ok() {
+                return serve_blob_response(&state, &fs, &repo_path, &headers);
+            }
+        }
+
         serve_path(&state, &fs, &ref_label, &state.base_path, &repo_path, &headers)
     })
     .await
@@ -802,6 +874,15 @@ async fn handle_multi_ref_root(
 ) -> Response {
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
+        // /{40-hex} — try blob hash first, fall back to ref lookup
+        if is_hex40(&ref_name) {
+            if let Some(fs) = get_any_fs(&state) {
+                if fs.read_by_hash(&ref_name, 0, Some(0)).is_ok() {
+                    return serve_blob_response(&state, &fs, &ref_name, &headers);
+                }
+            }
+        }
+
         let fs = match state.resolve_fs(&ref_name) {
             Some(fs) => fs,
             None => return not_found(&format!("Unknown ref: {}", ref_name)),
@@ -813,6 +894,28 @@ async fn handle_multi_ref_root(
     .unwrap_or_else(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
     })
+}
+
+async fn handle_blob(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(hash): Path<String>,
+) -> Response {
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        if !is_hex40(&hash) {
+            return not_found(&format!("Invalid blob hash: {}", hash));
+        }
+
+        let fs = match get_any_fs(&state) {
+            Some(fs) => fs,
+            None => return not_found("No accessible ref"),
+        };
+
+        serve_blob_response(&state, &fs, &hash, &headers)
+    })
+    .await
+    .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -905,6 +1008,7 @@ async fn main() {
     let app = if args.all_refs {
         let mut router = Router::new()
             .route("/", get(handle_ref_listing))
+            .route("/_/blobs/{hash}", get(handle_blob))
             .route("/{ref_name}", get(handle_multi_ref_root))
             .route("/{ref_name}/", get(handle_multi_ref_root))
             .route("/{ref_name}/{*path}", get(handle_multi_ref));
@@ -915,6 +1019,7 @@ async fn main() {
     } else {
         let mut router = Router::new()
             .route("/", get(handle_single_ref))
+            .route("/_/blobs/{hash}", get(handle_blob))
             .route("/{*path}", get(handle_single_ref));
         if !base_path.is_empty() {
             router = Router::new().nest(&base_path, router);

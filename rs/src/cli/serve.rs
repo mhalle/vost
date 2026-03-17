@@ -310,6 +310,90 @@ fn respond_404_tracked(request: tiny_http::Request, message: &str) -> ResponseIn
 }
 
 // ---------------------------------------------------------------------------
+// Blob hash check
+// ---------------------------------------------------------------------------
+
+fn is_hex40(s: &str) -> bool {
+    s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+// ---------------------------------------------------------------------------
+// Blob serving (content-addressed)
+// ---------------------------------------------------------------------------
+
+fn serve_blob(
+    request: tiny_http::Request,
+    fs: &crate::Fs,
+    hash: &str,
+    cache_control: &str,
+    cors: bool,
+) -> ResponseInfo {
+    let etag = format!("\"{}\"", hash);
+
+    // 304 check
+    let if_none_match = request.headers().iter()
+        .find(|h| h.field.as_str() == "If-None-Match" || h.field.as_str() == "if-none-match")
+        .map(|h| h.value.as_str().to_string());
+    if let Some(ref inm) = if_none_match {
+        if inm == &etag {
+            return respond_304_tracked(request, &etag);
+        }
+    }
+
+    let data = match fs.read_by_hash(hash, 0, None) {
+        Ok(d) => d,
+        Err(_) => return respond_404_tracked(request, &format!("Blob not found: {}", hash)),
+    };
+
+    // JSON mode
+    let accept = request.headers().iter()
+        .find(|h| h.field.as_str() == "Accept" || h.field.as_str() == "accept")
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default();
+    if accept.contains("application/json") {
+        let json = serde_json::json!({
+            "hash": hash,
+            "size": data.len(),
+            "type": "blob",
+        });
+        let body = json.to_string();
+        let mut headers: Vec<(&str, &str)> = vec![
+            ("ETag", &etag),
+            ("Cache-Control", cache_control),
+        ];
+        if cors { headers.push(("Access-Control-Allow-Origin", "*")); }
+        return respond_tracked(request, 200, "application/json", body.as_bytes(), &headers);
+    }
+
+    // Range request
+    let range_header = request.headers().iter()
+        .find(|h| h.field.as_str() == "Range" || h.field.as_str() == "range")
+        .map(|h| h.value.as_str().to_string());
+    if let Some(ref range_val) = range_header {
+        if let Some((start, end)) = parse_range(range_val, data.len() as u64) {
+            let slice = &data[start as usize..(end + 1) as usize];
+            let content_range = format!("bytes {}-{}/{}", start, end, data.len());
+            let mut headers: Vec<(&str, &str)> = vec![
+                ("ETag", &etag),
+                ("Cache-Control", cache_control),
+                ("Accept-Ranges", "bytes"),
+                ("Content-Range", &content_range),
+            ];
+            if cors { headers.push(("Access-Control-Allow-Origin", "*")); }
+            return respond_tracked(request, 206, "application/octet-stream", slice, &headers);
+        }
+    }
+
+    let mut headers: Vec<(&str, &str)> = vec![
+        ("ETag", &etag),
+        ("Cache-Control", cache_control),
+        ("Accept-Ranges", "bytes"),
+    ];
+    if cors { headers.push(("Access-Control-Allow-Origin", "*")); }
+    respond_owned_tracked(request, 200, "application/octet-stream", data, &headers)
+}
+
+// ---------------------------------------------------------------------------
 // Serving logic
 // ---------------------------------------------------------------------------
 
@@ -740,6 +824,47 @@ pub fn cmd_serve(repo_path: &str, args: &ServeArgs, _verbose: bool) -> Result<()
         let path = path.trim_matches('/').to_string();
         // Percent-decode
         let path = percent_decode(&path);
+
+        // /_/blobs/{hash} — explicit content-addressed blob access
+        if path.starts_with("_/blobs/") {
+            let hash = &path[8..];
+            let info = if !is_hex40(hash) {
+                respond_404_tracked(request, &format!("Invalid blob hash: {}", hash))
+            } else {
+                let fs_opt = if args.all_refs {
+                    store.branches().list().ok()
+                        .and_then(|names| names.first().cloned())
+                        .and_then(|name| store.fs(&name).ok())
+                } else {
+                    resolve_fs(&store, &branch, &args.snap).ok()
+                };
+                match fs_opt {
+                    Some(fs) => serve_blob(request, &fs, hash, &cache_control, args.cors),
+                    None => respond_404_tracked(request, "No accessible ref"),
+                }
+            };
+            access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
+            continue;
+        }
+
+        // /{40-hex} — try blob hash first, fall back to normal routing
+        if is_hex40(&path) {
+            let fs_opt = if args.all_refs {
+                store.branches().list().ok()
+                    .and_then(|names| names.first().cloned())
+                    .and_then(|name| store.fs(&name).ok())
+            } else {
+                resolve_fs(&store, &branch, &args.snap).ok()
+            };
+            if let Some(ref fs) = fs_opt {
+                if fs.read_by_hash(&path, 0, Some(0)).is_ok() {
+                    let info = serve_blob(request, fs, &path, &cache_control, args.cors);
+                    access_logger.log(&client_ip, &method, &url_path, info.status, info.size);
+                    continue;
+                }
+            }
+            // Fall through to normal routing
+        }
 
         let info = if args.all_refs {
             // Multi-ref mode
