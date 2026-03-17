@@ -4,6 +4,38 @@ All notable changes to vost are documented in this file.
 
 ## Unreleased
 
+## v0.78.0 / Rust v0.10.5 / vost-server v0.2.0 (2026-03-17)
+
+**Added (all three HTTP servers — Python CLI, Rust CLI, vost-server):**
+
+- Content-addressed blob access: `/_/blobs/{hash}` (explicit) and `/{hash}` (shorthand, blob-first with path fallback)
+- `--upstream URL` — redirect (302) to upstream server on blob cache miss, enabling CDN-like server hierarchies
+- Per-blob ETags on file responses (survives commits to other files)
+- Range requests (`206 Partial Content`, `Accept-Ranges: bytes`)
+- `--immutable` flag (`Cache-Control: public, immutable, max-age=31536000`)
+- `--max-age N` flag (`Cache-Control: public, max-age=N`)
+- JSON file metadata now includes `hash` field (blob SHA)
+- Normalized CORS headers (`*` wildcards) and response format across all servers
+
+**Added (vost-server only):**
+
+- New crate: `vost-server/` — high-performance HTTP file server built on axum + tokio
+- Blob cache with `DashMap` (sharded locking) + `Bytes` (ref-counted, no copy on cache hit)
+- `spawn_blocking` on all git reads (async runtime stays responsive)
+- `--compress` / `--no-compress-type` for selective gzip compression
+- `--cache-size N` (default 4096 blob objects)
+- GitHub Actions release workflow (`server-v*` tags)
+
+**Added (Python + Rust CLI):**
+
+- `--format json|jsonl` on `diff`, `hash`, `branch list/hash/current`, `tag list/hash`, `note list`
+- `--output-format json|jsonl` on `backup --dry-run` and `restore --dry-run`
+
+**Fixed (Python + Rust CLI):**
+
+- `serve`: directory entries in listings now show trailing `/`
+- `serve`: ~100+ file extensions served as `text/plain` instead of `application/octet-stream`
+
 ## v0.77.1 / Rust v0.10.4 (2026-03-16)
 
 **Fixed (Python + Rust CLI):**
