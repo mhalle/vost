@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::{
     body::Body,
@@ -9,7 +9,9 @@ use axum::{
     routing::get,
     Router,
 };
+use bytes::Bytes;
 use clap::Parser;
+use dashmap::DashMap;
 use tower_http::cors::{Any, CorsLayer};
 use vost::fs::LogOptions;
 use vost::GitStore;
@@ -109,41 +111,48 @@ struct Args {
 }
 
 // ---------------------------------------------------------------------------
-// Blob cache (LRU by insertion order, bounded)
+// Blob cache (lock-free, bounded, zero-copy via Bytes)
 // ---------------------------------------------------------------------------
 
 struct BlobCache {
-    map: HashMap<String, Vec<u8>>,
-    order: Vec<String>,
+    map: DashMap<String, Bytes>,
+    count: AtomicUsize,
     capacity: usize,
 }
 
 impl BlobCache {
     fn new(capacity: usize) -> Self {
         Self {
-            map: HashMap::with_capacity(capacity.min(1024)),
-            order: Vec::with_capacity(capacity.min(1024)),
+            map: DashMap::with_capacity(capacity.min(1024)),
+            count: AtomicUsize::new(0),
             capacity,
         }
     }
 
-    fn get(&self, key: &str) -> Option<&Vec<u8>> {
-        self.map.get(key)
+    fn get(&self, key: &str) -> Option<Bytes> {
+        self.map.get(key).map(|v| v.value().clone()) // Bytes::clone is cheap (ref-count bump)
     }
 
-    fn insert(&mut self, key: String, value: Vec<u8>) {
+    fn insert(&self, key: String, value: Bytes) {
         if self.capacity == 0 {
             return;
         }
         if self.map.contains_key(&key) {
             return;
         }
-        while self.order.len() >= self.capacity {
-            let evict = self.order.remove(0);
-            self.map.remove(&evict);
+        // Evict if at capacity (random eviction — simple and fast under concurrent load)
+        if self.count.load(Ordering::Relaxed) >= self.capacity {
+            if let Some(entry) = self.map.iter().next() {
+                let evict_key = entry.key().clone();
+                drop(entry);
+                if self.map.remove(&evict_key).is_some() {
+                    self.count.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
         }
-        self.order.push(key.clone());
-        self.map.insert(key, value);
+        if self.map.insert(key, value).is_none() {
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -166,7 +175,7 @@ struct AppState {
     max_age: Option<u64>,
     base_path: String,
     max_file_size: u64,
-    blob_cache: Mutex<BlobCache>,
+    blob_cache: BlobCache,
     no_compress_types: Vec<String>,
 }
 
@@ -230,21 +239,15 @@ impl AppState {
 
     /// Read a blob, using the cache if available.
     /// Key is the blob OID (content-addressable = perfect cache key).
-    fn read_cached(&self, fs: &vost::Fs, path: &str, blob_hash: &str) -> Option<Vec<u8>> {
-        // Check cache first
-        {
-            let cache = self.blob_cache.lock().unwrap();
-            if let Some(data) = cache.get(blob_hash) {
-                return Some(data.clone());
-            }
+    /// Returns Bytes (zero-copy on cache hit — just a ref-count bump).
+    fn read_cached(&self, fs: &vost::Fs, path: &str, blob_hash: &str) -> Option<Bytes> {
+        if let Some(data) = self.blob_cache.get(blob_hash) {
+            return Some(data);
         }
-        // Cache miss — read from git
         let data = fs.read(path).ok()?;
-        {
-            let mut cache = self.blob_cache.lock().unwrap();
-            cache.insert(blob_hash.to_string(), data.clone());
-        }
-        Some(data)
+        let bytes = Bytes::from(data);
+        self.blob_cache.insert(blob_hash.to_string(), bytes.clone());
+        Some(bytes)
     }
 
     /// Compute the Cache-Control header value.
@@ -406,7 +409,7 @@ fn json_response(value: serde_json::Value, etag: &str, cache_control: &str) -> R
 }
 
 fn file_response(
-    data: Vec<u8>,
+    data: Bytes,
     mime: &str,
     etag: &str,
     cache_control: &str,
@@ -428,7 +431,7 @@ fn file_response(
 
 /// Respond with a 206 Partial Content for a Range request.
 fn range_response(
-    data: Vec<u8>,
+    data: Bytes,
     mime: &str,
     etag: &str,
     cache_control: &str,
@@ -498,9 +501,18 @@ fn serve_blob_response(state: &AppState, fs: &vost::Fs, hash: &str, headers: &He
         }
     }
 
-    let data = match fs.read_by_hash(hash, 0, None) {
-        Ok(d) => d,
-        Err(_) => return not_found(&format!("Blob not found: {}", hash)),
+    // Check cache first, then read from git
+    let data: Bytes = if let Some(cached) = state.blob_cache.get(hash) {
+        cached
+    } else {
+        match fs.read_by_hash(hash, 0, None) {
+            Ok(d) => {
+                let bytes = Bytes::from(d);
+                state.blob_cache.insert(hash.to_string(), bytes.clone());
+                bytes
+            }
+            Err(_) => return not_found(&format!("Blob not found: {}", hash)),
+        }
     };
 
     if want_json {
@@ -515,15 +527,9 @@ fn serve_blob_response(state: &AppState, fs: &vost::Fs, hash: &str, headers: &He
         );
     }
 
-    // Use blob cache
-    {
-        let mut cache = state.blob_cache.lock().unwrap();
-        cache.insert(hash.to_string(), data.clone());
-    }
-
     let total = data.len() as u64;
     if let Some((start, end)) = parse_range(headers, total) {
-        let slice = data[start as usize..(end + 1) as usize].to_vec();
+        let slice = data.slice(start as usize..(end + 1) as usize);
         return range_response(slice, "application/octet-stream", &etag, &cc, start, end, total, true);
     }
 
@@ -702,7 +708,7 @@ fn serve_file_content(
     if let Some((start, end)) = parse_range(headers, total) {
         let start_usize = start as usize;
         let end_usize = (end + 1) as usize;
-        let slice = data[start_usize..end_usize.min(data.len())].to_vec();
+        let slice = data.slice(start_usize..end_usize.min(data.len()));
         return range_response(slice, mime, &etag, &cc, start, end, total, skip_compress);
     }
 
@@ -999,7 +1005,7 @@ async fn main() {
         max_age: args.max_age,
         base_path: base_path.clone(),
         max_file_size: args.max_file_size,
-        blob_cache: Mutex::new(BlobCache::new(args.cache_size)),
+        blob_cache: BlobCache::new(args.cache_size),
         no_compress_types,
     });
 
