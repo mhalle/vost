@@ -4,6 +4,20 @@ All notable changes to vost are documented in this file.
 
 ## Unreleased
 
+## v0.78.2 / Rust v0.10.7 / vost-server v0.2.2 (2026-03-17)
+
+**Added (all five ports):**
+
+- `fs.ls(recursive=True)` — flat list of all file paths (Rust: `fs.ls_recursive()`)
+
+**Fixed (all three HTTP servers):**
+
+- Zero-length objects no longer crash on Range requests
+- `--compress` in vost-server now installs actual gzip compression middleware
+- Removed `/{hash}` aliasing — blob access is only via `/_/blobs/{hash}`
+- Rust CLI: query strings no longer treated as part of file path
+- Base-path matching now requires segment boundary (`/data` no longer matches `/database`)
+
 ## v0.78.1 / Rust v0.10.6 / vost-server v0.2.1 (2026-03-17)
 
 **Added (all five ports — Python, Rust, TypeScript, Kotlin, C++):**

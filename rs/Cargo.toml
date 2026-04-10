@@ -1,6 +1,6 @@
 [package]
 name = "vost"
-version = "0.10.6"
+version = "0.10.7"
 edition = "2021"
 rust-version = "1.75"
 description = "A versioned filesystem backed by a bare git repository"
