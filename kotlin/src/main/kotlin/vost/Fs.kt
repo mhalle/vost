@@ -164,8 +164,18 @@ class Fs internal constructor(
      *
      * @throws NotADirectoryError If path is a file.
      */
-    fun ls(path: String? = null): List<String> =
-        listTreeAtPath(store.repo, treeId, path)
+    fun ls(path: String? = null, recursive: Boolean = false): List<String> {
+        if (recursive) {
+            val result = mutableListOf<String>()
+            for (wde in walk(path)) {
+                for (f in wde.files) {
+                    result.add(if (wde.dirpath.isEmpty()) f.name else "${wde.dirpath}/${f.name}")
+                }
+            }
+            return result
+        }
+        return listTreeAtPath(store.repo, treeId, path)
+    }
 
     /**
      * Walk the repo tree recursively, like os.walk.

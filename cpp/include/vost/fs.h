@@ -91,8 +91,11 @@ public:
     std::string read_text(const std::string& path) const;
 
     /// List entry names at `path` (or root if empty).
+    /// When `recursive` is true, returns a flat list of all file paths
+    /// (full relative paths, no directories).
     /// @throws NotADirectoryError if path is a file.
-    std::vector<std::string> ls(const std::string& path = "") const;
+    std::vector<std::string> ls(const std::string& path = "",
+                                bool recursive = false) const;
 
     /// Recursively walk all directories under `path` (os.walk-style).
     /// Returns one WalkDirEntry per directory, each with dirnames and files.

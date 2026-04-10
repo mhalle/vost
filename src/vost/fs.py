@@ -216,15 +216,23 @@ class FS:
         """
         return self.read(path).decode(encoding)
 
-    def ls(self, path: str | os.PathLike[str] | None = None) -> list[str]:
+    def ls(self, path: str | os.PathLike[str] | None = None, *, recursive: bool = False) -> list[str]:
         """List entry names at *path* (or root if ``None``).
 
         Args:
             path: Directory path, or ``None`` for the repo root.
+            recursive: If True, list all files recursively with full paths.
+                Directories are not included in the output.
 
         Raises:
             NotADirectoryError: If *path* is a file.
         """
+        if recursive:
+            result = []
+            for dirpath, _, files in self.walk(path):
+                for f in files:
+                    result.append(f"{dirpath}/{f.name}" if dirpath else f.name)
+            return result
         return list_tree_at_path(self._store._repo, self._tree_oid, path)
 
     def walk(self, path: str | os.PathLike[str] | None = None) -> Iterator[tuple[str, list[str], list[WalkEntry]]]:

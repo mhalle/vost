@@ -388,6 +388,24 @@ impl Fs {
         })
     }
 
+    /// List all file paths recursively under `path`.
+    ///
+    /// Returns a flat list of full relative paths. Directories are not included.
+    pub fn ls_recursive(&self, path: &str) -> Result<Vec<String>> {
+        let walk = self.walk(path)?;
+        let mut result = Vec::new();
+        for wde in walk {
+            for fe in &wde.files {
+                if wde.dirpath.is_empty() {
+                    result.push(fe.name.clone());
+                } else {
+                    result.push(format!("{}/{}", wde.dirpath, fe.name));
+                }
+            }
+        }
+        Ok(result)
+    }
+
     /// Recursively walk the tree under `path` (os.walk-style).
     pub fn walk(&self, path: &str) -> Result<Vec<WalkDirEntry>> {
         let tree_oid = self.require_tree()?;

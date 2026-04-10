@@ -145,7 +145,21 @@ std::string Fs::read_text(const std::string& path) const {
     return std::string(data.begin(), data.end());
 }
 
-std::vector<std::string> Fs::ls(const std::string& path) const {
+std::vector<std::string> Fs::ls(const std::string& path, bool recursive) const {
+    if (recursive) {
+        auto entries = walk(path);
+        std::vector<std::string> result;
+        for (const auto& wde : entries) {
+            for (const auto& fe : wde.files) {
+                if (wde.dirpath.empty()) {
+                    result.push_back(fe.name);
+                } else {
+                    result.push_back(wde.dirpath + "/" + fe.name);
+                }
+            }
+        }
+        return result;
+    }
     const auto& tree = require_tree();
     std::string norm = paths::normalize(path);
     std::lock_guard<std::mutex> lk(inner_->mutex);

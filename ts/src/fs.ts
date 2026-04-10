@@ -252,7 +252,16 @@ export class FS {
    * @returns Array of entry names (files and subdirectories).
    * @throws {NotADirectoryError} If path is a file.
    */
-  async ls(path?: string | null): Promise<string[]> {
+  async ls(path?: string | null, opts?: { recursive?: boolean }): Promise<string[]> {
+    if (opts?.recursive) {
+      const result: string[] = [];
+      for await (const [dirpath, , files] of this.walk(path)) {
+        for (const f of files) {
+          result.push(dirpath ? `${dirpath}/${f.name}` : f.name);
+        }
+      }
+      return result;
+    }
     return listTreeAtPath(this._fsModule, this._gitdir, this._treeOid, path);
   }
 
