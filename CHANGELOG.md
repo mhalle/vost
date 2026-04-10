@@ -4,7 +4,7 @@ All notable changes to vost are documented in this file.
 
 ## Unreleased
 
-## v0.78.2 / Rust v0.10.7 / vost-server v0.2.2 (2026-03-17)
+## v0.78.2 / TS v0.9.10 / Rust v0.10.7 / C++ v0.9.2 / Kotlin v0.9.11 / vost-server v0.2.2 (2026-03-17)
 
 **Added (all five ports):**
 
